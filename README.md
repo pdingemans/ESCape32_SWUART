@@ -1,8 +1,9 @@
-ESCape32
+ESCape32 fork
 ========
 
 Firmware for 32-bit BLDC motor electronic speed controllers that aims for simplicity. It is designed to deliver smooth and efficient motor drive, fast transitions from a complete stop to full throttle, robust direction reversals, and maximum hardware support.
 
+Fork created for POC of a SWuart for inverted SPORT support for the F421 MCU
 
 Features
 --------
