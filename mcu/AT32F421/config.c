@@ -40,7 +40,7 @@
 
 #define ADC1_BASE ADC_BASE
 #define COMP_CSR MMIO32(SYSCFG_COMP_BASE + 0x1c)
-
+static uint8_t ae = 1; // adc enabled, lets follow current programming style for variables naming....
 static char len, ain;
 static uint16_t buf[6];
 #ifdef LED_WS2812
@@ -203,6 +203,24 @@ void io_analog(void) {
 	GPIOA_MODER |= 0x30; // A2 (analog)
 }
 
+// functions to stop/start ADC conversions
+// this is needed because ADC+DMA block timer DMA requests
+void disable_ADC(void) 
+{
+	ADC1_CR2 = 0;
+	DMA1_CCR(1) = 0;
+	ae=0;
+    // dma_channel_enable(DMA1_CHANNEL1, FALSE);
+    // adc_dma_mode_enable(ADC1, FALSE);
+    // adc_enable(ADC1, FALSE);
+}
+
+
+void enable_ADC(void) {
+	ae=1;
+	adctrig(); // just start again...
+}
+
 void adctrig(void) {
 	if (DMA1_CCR(1) & DMA_CCR_EN) return;
 #ifdef LED_WS2812
@@ -215,13 +233,16 @@ void adctrig(void) {
 }
 
 void tim1_cc_isr(void) {
+
 	TIM1_SR = ~TIM_SR_CC1IF;
-	if (!(ADC1_CR2 & ADC_CR2_DMA)) return;
+
+	if (!(ADC1_CR2 & ADC_CR2_DMA)||!ae) return;
 	ADC1_CR2 = ADC_CR2_ADON | ADC_CR2_TSVREFE | ADC_CR2_DMA | ADC_CR2_EXTTRIG | ADC_CR2_EXTSEL_SWSTART | ADC_CR2_SWSTART;
 }
 
 void dma1_channel1_isr(void) {
 	DMA1_IFCR = DMA_IFCR_CTCIF(1);
+	return;
 #ifdef LED_WS2812
 	if (DMA1_CCR(1) & DMA_CCR_DIR) {
 		DMA1_CCR(1) = 0;

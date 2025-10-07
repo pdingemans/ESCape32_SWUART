@@ -20,6 +20,9 @@ add_compile_options(-ffreestanding -ffunction-sections -fdata-sections -fsingle-
 	-Wno-variadic-macros -Wno-unused-result -Wno-unused-parameter -Wno-unused-label)
 add_link_options(-nostartfiles -Wl,--gc-sections)
 
+# Include SWUART library support
+include(swuart.cmake)
+
 function(add_target name mcu)
 	include(mcu/${mcu}/config.cmake)
 	file(READ src/main.c main_c)
@@ -37,6 +40,13 @@ function(add_target name mcu)
 	target_include_directories(${elf} PRIVATE src mcu/${mcu})
 	target_compile_options(${elf} PRIVATE ${opts})
 	target_compile_definitions(${elf} PRIVATE ${mcu} ${name} ${defs} TARGET_NAME="${name}" ${ARGN})
+	
+	# Check if SWUART should be enabled (can be controlled via compile definition)
+	list(FIND ARGN "USE_SWUART" swuart_index)
+	if(NOT swuart_index EQUAL -1)
+		add_swuart_to_target(${elf} ${mcu})
+	endif()
+	
 	target_link_options(${elf} PRIVATE -T${CMAKE_CURRENT_SOURCE_DIR}/mcu/${mcu}/config.ld -T${CMAKE_CURRENT_SOURCE_DIR}/mcu/common.ld ${opts})
 	target_link_libraries(${elf} c_nano gcc nosys ${libs})
 	add_custom_command(
@@ -58,7 +68,7 @@ add_target(DYS1 STM32F051 DEAD_TIME=26 COMP_MAP=123 SENS_MAP=0xA6A3 CURR_MUL=60 
 add_target(EMAX1 STM32F051 DEAD_TIME=26 COMP_MAP=123 IO_PA2)
 add_target(ESCAPE1 STM32G071 DEAD_TIME=35 COMP_MAP=123 HALL_MAP=0xAFB35 SENS_MAP=0xA6A5A4 VOLT_MUL=1100 CURR_MUL=30 BEC_MAP=0xCEF LED_WS2812 LED_STAT IO_PA2)
 add_target(ESCAPE2 STM32G071 DEAD_TIME=35 COMP_MAP=123 SENS_MAP=0xA6 VOLT_MUL=1100 BEC_MAP=0xADE IO_PA2)
-add_target(ESCAPE3 AT32F421 DEAD_TIME=66 COMP_MAP=123 SENS_MAP=0xA6 VOLT_MUL=1100 BEC_MAP=0xADE)
+add_target(ESCAPE3 AT32F421 DEAD_TIME=66 COMP_MAP=123 SENS_MAP=0xA6 VOLT_MUL=1100 BEC_MAP=0xADE USE_SWUART)
 add_target(ESCAPE4 STM32G071 DEAD_TIME=35 COMP_MAP=123 HALL_MAP=0xB358 SENS_MAP=0xA6A5A4 VOLT_MUL=1100 CURR_MUL=30 BEC_MAP=0xCEF LED_MAP=0xF2AF LED1_INV LED_STAT IO_PA2)
 add_target(ESCAPE5 STM32G071 DEAD_TIME=35 COMP_MAP=123 SENS_MAP=0xA6 VOLT_MUL=1100 BEC_MAP=0xA45 LED_WS2812 LED_STAT IO_PA2)
 add_target(FLYCOLOR1 STM32F051 DEAD_TIME=26 COMP_MAP=123 SENS_MAP=0xA6 VOLT_MUL=1100 LED_MAP=0xB5B4B3 IO_PA2)
@@ -79,7 +89,7 @@ add_target(IFLIGHT3 STM32G071 DEAD_TIME=35 COMP_MAP=132 SENS_MAP=0xA0 VOLT_MUL=1
 add_target(IFLIGHT4 STM32G071 DEAD_TIME=35 COMP_MAP=213 SENS_MAP=0xA5 VOLT_MUL=1100 LED_WS2812 IO_PA6)
 add_target(LUMENIER1 GD32F350 DEAD_TIME=57 COMP_MAP=321 SENS_MAP=0xA3 VOLT_MUL=1100)
 add_target(LYI1 AT32F421 DEAD_TIME=66 COMP_MAP=321 SENS_MAP=0xA3 VOLT_MUL=1100)
-add_target(NEUTRON1 AT32F421 DEAD_TIME=66 COMP_MAP=321)
+add_target(NEUTRON1 AT32F421 DEAD_TIME=66 COMP_MAP=321 USE_SWUART)
 add_target(NEUTRON2 AT32F421 DEAD_TIME=66 COMP_MAP=321 INVERTED_HIGH)
 add_target(NEUTRON3 STM32L431 DEAD_TIME=44 COMP_MAP=123 SENS_MAP=0xA6A3 VOLT_MUL=2100 CURR_MUL=125 USE_COMP2 USE_OPAMP)
 add_target(ODDITYRC1 AT32F421 DEAD_TIME=66 COMP_MAP=123 SENS_MAP=0xA3BF VOLT_MUL=1100 CURR_MUL=40)

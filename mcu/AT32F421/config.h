@@ -42,6 +42,28 @@
 #define USART1_TX_DMA 2
 #define usart1_tx_dma_isr dma1_channel2_3_dma2_channel1_2_isr
 
+
+// sw uart stuff
+#define SWUART_GPIO_PORT GPIOB
+#define SWUART_GPIO_PIN GPIO6
+#define SWUART_GPIO_PIN_NUM 6
+#define SWUART_BAUD_RATE 57600
+
+// EXTI configuration for PB6 which is the Sport telemetry input pin
+#define SWUART_EXTI_LINE EXTI6                    // libopencm3 EXTI line
+#define SWUART_EXTI_IRQ NVIC_EXTI4_15_IRQ        // libopencm3 EXTI IRQ for F421 (EXTI4-15 shared handler)
+
+// Timer configuration (using TIM16 for both TX and RX)
+#define SWUART_TIMER TIM16                        // libopencm3 timer
+#define SWUART_TIMER_CLK RCC_TIM16            // libopencm3 timer clock
+
+// DMA configuration (using DMA1 Channel 3)
+#define SWUART_DMA DMA1                          // libopencm3 DMA controller
+#define SWUART_DMA_CHANNEL DMA_CHANNEL3         // libopencm3 DMA channel
+#define SWUART_DMA_IRQ NVIC_DMA1_CHANNEL2_3_DMA2_CHANNEL1_2_IRQ // libopencm3 DMA IRQ
+#define SWUART_DMA_STREAM DMA_CHANNEL3          // DMA stream identifier
+
+
 #define USART2_RX_DMA 5
 #define USART2_TX_DMA 4
 

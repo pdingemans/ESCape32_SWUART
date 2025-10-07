@@ -22,13 +22,17 @@
 #endif
 
 #ifdef AT32F4
+#include "singlewire_uart.h" // this is needed for sport telemetry and prob also sbus
 #define USART1_TDR USART1_DR
 #define USART1_RDR USART1_DR
+
 #endif
 
 static int ibusfunc(int len);
 static int sportfunc(int len);
 static int (*iofunc)(int len);
+static void sportcallback (void *context, uint8_t data);
+
 static char iobuf[16];
 
 void inittelem(void) {
@@ -42,12 +46,24 @@ void inittelem(void) {
 #endif
 			break;
 		case 3: // S.Port
+#ifndef AT32F4
+#warning "AT32F4 is NOT defined - using AT32F4 path"
+
 			iofunc = sportfunc;
 			USART1_BRR = CLK_CNT(57600);
-#ifndef AT32F4
+
 			USART1_RTOR = 26; // TX delay ~450us
 			USART1_CR2 = USART_CR2_RTOEN | USART_CR2_RXINV | USART_CR2_TXINV;
 			GPIOB_PUPDR = (GPIOB_PUPDR & ~0x3000) | 0x2000; // B6 (pull-down)
+#endif
+#ifdef AT32F4
+#warning "AT32F4 IS defined - using AT32F4 path"
+// here we use the sw uart init function to set inverted and 57600 baud
+			singlewire_uart_init(); // sets everything from dma to interrupt line
+			sw_uart_set_rx_callback(sportcallback,NULL);
+			// lets just jump out of this function and use the sw uart
+			// no other code for at32f421 is necessary as everything is done in the singlewire_uart.c
+			return;
 #endif
 			break;
 		case 4: // CRSF
@@ -99,11 +115,12 @@ reading:
 	DMA_CNDTR(USART1_DMA_BASE, USART1_RX_DMA) = sizeof iobuf;
 	DMA_CCR(USART1_DMA_BASE, USART1_RX_DMA) = DMA_CCR_EN | DMA_CCR_MINC | DMA_CCR_PSIZE_8BIT | DMA_CCR_MSIZE_8BIT;
 }
-
+/*
 void usart1_tx_dma_isr(void) {
 	DMA_IFCR(USART1_DMA_BASE) = DMA_IFCR_CTCIF(USART1_TX_DMA);
 	DMA_CCR(USART1_DMA_BASE, USART1_TX_DMA) = 0;
 }
+*/
 
 static int ibusresp(char a, int x) {
 	char b = x, c = x >> 8;
@@ -181,7 +198,37 @@ static int sportfunc(int len) {
 	}
 	return 0;
 }
-
+void sportcallback(void *context, uint8_t data)
+{
+	static const uint16_t type[] = {0xb70, 0x400, 0x210, 0x200, 0xb30, 0x500};
+	static int n;
+	static enum {WAIT_START, WAIT_ID} state = WAIT_START;
+	if (state == WAIT_START) {
+		if (data == 0x7e) {
+			state = WAIT_ID;
+		}
+	} else if (state == WAIT_ID) {
+		if ((data & 0x1f) != cfg.telem_phid - 1) {
+			state = WAIT_START; // Invalid ID, go back to waiting for start
+			return;
+		}
+		if (n == 6) n = 0;
+		int t = type[n];
+		int len = 0;
+		switch (n++) {
+			case 0: len = sportresp(t, temp1); break;
+			case 1: len = sportresp(t, temp2); break;
+			case 2: len = sportresp(t, volt); break;
+			case 3: len = sportresp(t, curr * 205 >> 11); break;
+			case 4: len = sportresp(t, csum); break;
+			case 5: len = sportresp(t, erpm / (cfg.telem_poles >> 1)); break;
+		}
+		if (len > 0) {
+			singlewire_uart_send_frame((uint8_t*)iobuf, len);
+		}
+		state = WAIT_START; // Go back to waiting for start
+	}
+}
 void kisstelem(void) {
 	if (DMA_CCR(USART1_DMA_BASE, USART1_TX_DMA) & DMA_CCR_EN) return;
 	int r = erpm * 41 >> 12;

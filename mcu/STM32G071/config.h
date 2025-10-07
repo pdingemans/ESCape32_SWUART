@@ -57,7 +57,7 @@
 
 #define USART1_RX_DMA 2
 #define USART1_TX_DMA 3
-#define usart1_tx_dma_isr dma1_channel2_3_isr
+//#define usart1_tx_dma_isr dma1_channel2_3_isr
 
 #define USART2_RX_DMA 1
 #define USART2_TX_DMA 5

@@ -146,6 +146,9 @@ void resetcom(void);
 int playmusic(const char *str, int vol);
 void playsound(const char *buf, int vol);
 
+void disable_ADC(void) ;
+void enable_ADC(void) ;
+
 static inline int min(int a, int b) {return a < b ? a : b;}
 static inline int max(int a, int b) {return a > b ? a : b;}
 static inline int clamp(int x, int a, int b) {return min(max(x, a), b);}
