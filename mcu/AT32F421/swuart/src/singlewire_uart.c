@@ -567,27 +567,9 @@ static inline void sw_uart_prepare_tx_dma_buffer(uint8_t *data, uint8_t length)
     uint16_t pin_mask = (1 << sw_uart_config.gpio_pin_num);
     uint32_t set_command = pin_mask;       // Set bit (HIGH)
     uint32_t clr_command = pin_mask << 16; // Clear bit (LOW) - upper 16 bits of SCR
-    // as we have a half duplex bus and its for sport telemetry the receiving side
-    // needs some time to switch from TX to RX
-    // lets give it 400 usec as thats what frsky does
-    // todo and test
-    // fiil the while buffer with setcommands, can be done faster
-    // and then shift the input of the buffer << 16 to get the clr commands when needed
 
-    // Enable TIM16 and start from 0 for timing measurement
-    cm_disable_interrupts();
-
-    rcc_periph_clock_enable(RCC_TIM14);
-    timer_disable_counter(TIM14);
-    timer_set_prescaler(TIM14, 12 - 1); // 120MHz / 12 = 10MHz = 100ns per tick
-    timer_set_period(TIM14, 0xFFFF); // Max period
-    timer_generate_event(TIM14, TIM_EGR_UG); // Generate update event to load prescaler
-    timer_set_counter(TIM14, 0); // Reset counter after update event
-    timer_enable_counter(TIM14);
-
-volatile uint32_t start_time = timer_get_counter(TIM14);
-volatile uint32_t end_time; 
-   // the following code takes ~24 usec to complete
+ 
+   // the following code takes ~16 usec, 
    // Process each byte
     for (uint8_t byte_idx = 0; byte_idx < length && buffer_index < SW_UART_TX_DMA_BUFFER_SIZE - 11; byte_idx++)
     {
@@ -597,24 +579,8 @@ volatile uint32_t end_time;
         // Start bit = HIGH, Data inverted, Stop bits = LOW
 
         // 1. Start bit (HIGH for inverted protocol)
-        sw_uart_tx_dma_buffer[buffer_index++] = set_command;
-        // this whole function with a for loop implementation takes 12.9 usec when sending 20 bytes
+        sw_uart_tx_dma_buffer[buffer_index++] = set_command; // start command
 
-        // 2. Data bits (LSB first, inverted)
-        // do not try to optimize this yourself, you will fail miserably :) compiler knows better....
-        // for (uint8_t bit = 0; bit < 8; bit++)
-        // {
-        //     if (byte_data & (1 << bit))
-        //     {
-        //         // Data bit = 1 → Output LOW (inverted)
-        //         sw_uart_tx_dma_buffer[buffer_index++] = clr_command;
-        //     }
-        //     else
-        //     {
-        //         // Data bit = 0 → Output HIGH (inverted)
-        //         sw_uart_tx_dma_buffer[buffer_index++] = set_command;
-        //     }
-        // }
         sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 0)) ? clr_command : set_command; // Bit 0
         sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 1)) ? clr_command : set_command; // Bit 1
         sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 2)) ? clr_command : set_command; // Bit 2
@@ -623,68 +589,11 @@ volatile uint32_t end_time;
         sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 5)) ? clr_command : set_command; // Bit 5
         sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 6)) ? clr_command : set_command; // Bit 6
         sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 7)) ? clr_command : set_command; // Bit 7
-         sw_uart_tx_dma_buffer[buffer_index++] = clr_command; // First stop bit
+        sw_uart_tx_dma_buffer[buffer_index++] = clr_command; // First stop bit
         sw_uart_tx_dma_buffer[buffer_index++] = clr_command; // Second stop bit
    
     }
-    //     /*
-    //     // 2. Data bits (LSB first, inverted) - unrolled for speed :()
-    //     // this implementaion with 20 byte takes: 14.9 usec...
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 0)) ? clr_command : set_command; // Bit 0
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 1)) ? clr_command : set_command; // Bit 1
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 2)) ? clr_command : set_command; // Bit 2
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 3)) ? clr_command : set_command; // Bit 3
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 4)) ? clr_command : set_command; // Bit 4
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 5)) ? clr_command : set_command; // Bit 5
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 6)) ? clr_command : set_command; // Bit 6
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 7)) ? clr_command : set_command; // Bit 7
-    //     */
-
-    //     // 3. Stop bits (2 bits, both LOW for inverted protocol)
-    //     sw_uart_tx_dma_buffer[buffer_index++] = clr_command; // First stop bit
-    //     sw_uart_tx_dma_buffer[buffer_index++] = clr_command; // Second stop bit
-    // }
-
-//memset((void *)sw_uart_tx_dma_buffer,set_command, length*11*sizeof(uint32_t));
-    // for (uint8_t byte_idx = 0; byte_idx < length && buffer_index < SW_UART_TX_DMA_BUFFER_SIZE - 11; byte_idx++)
-    // {
-    //     uint8_t byte_data = data[byte_idx];
-
-    //     // Prepare frame for inverted protocol (SPORT):
-    //     // Start bit = HIGH, Data inverted, Stop bits = LOW
-
-    //     // 1. Start bit (HIGH for inverted protocol)
-    //     //sw_uart_tx_dma_buffer[buffer_index++] = set_command;
-    //     // this whole function with a for loop implementation takes 12.9 usec when sending 20 bytes
-
-    //     // 2. Data bits (LSB first, inverted)
-
-    //     // 2. Data bits (LSB first, inverted) - unrolled for speed :()
-    //     // this implementaion with 20 byte takes: 14.9 usec...
-    //  //   start_time = timer_get_counter(TIM14);
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 0)) ? clr_command: set_command; // Bit 0
-
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 1)) ? clr_command: set_command; // Bit 1
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 2)) ? clr_command: set_command; // Bit 2
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 3)) ? clr_command: set_command; // Bit 3
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 4)) ? clr_command: set_command; // Bit 4
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 5)) ? clr_command: set_command; // Bit 5
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 6)) ? clr_command: set_command; // Bit 6
-    //     sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 7)) ? clr_command: set_command; // Bit 7
-
-    //     // 3. Stop bits (2 bits, both LOW for inverted protocol)
-    //     sw_uart_tx_dma_buffer[buffer_index++] = clr_command; // First stop bit
-    //     sw_uart_tx_dma_buffer[buffer_index++] = clr_command; // Second stop bit
-    //    // end_time = timer_get_counter(TIM14);
-    // }
-
-
-
-    sw_uart_tx_bits_count = buffer_index;
-
-   volatile uint32_t elapsed = timer_get_counter(TIM14);
-   timer_disable_counter(TIM14);
-   cm_enable_interrupts();
+     sw_uart_tx_bits_count = buffer_index;
 
 }
 
