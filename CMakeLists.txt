@@ -2,8 +2,24 @@ cmake_minimum_required(VERSION 3.15)
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_C_COMPILER arm-none-eabi-gcc)
 set(CMAKE_C_COMPILER_WORKS 1)
-set(CMAKE_C_FLAGS "-Os -g")
-set(CMAKE_C_FLAGS_DEBUG "-Og")
+
+# Set default build type if not specified
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
+endif()
+
+# Override CMake's default flags with our custom ones
+set(CMAKE_C_FLAGS "-Os -g" CACHE STRING "C compiler flags" FORCE)
+set(CMAKE_C_FLAGS_DEBUG "-O0 -g3" CACHE STRING "C compiler flags for Debug" FORCE)
+set(CMAKE_C_FLAGS_RELEASE "-Os -g" CACHE STRING "C compiler flags for Release" FORCE)
+
+# Apply build type specific flags
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS_DEBUG}" CACHE STRING "C compiler flags" FORCE)
+elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS_RELEASE}" CACHE STRING "C compiler flags" FORCE)
+endif()
+
 project(ESCape32 C)
 if(UNIX AND NOT CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT) # Use 'CMAKE_INSTALL_PREFIX' as alternative system root
 	set(CMAKE_PREFIX_PATH ${CMAKE_INSTALL_PREFIX})
