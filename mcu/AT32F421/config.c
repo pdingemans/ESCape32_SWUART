@@ -40,7 +40,7 @@
 
 #define ADC1_BASE ADC_BASE
 #define COMP_CSR MMIO32(SYSCFG_COMP_BASE + 0x1c)
-static uint8_t ae = 1; // adc enabled, lets follow current programming style for variables naming....
+static uint8_t adc_disabled_cnt = 0; // adc disabled counter
 static char len, ain;
 static uint16_t buf[6];
 #ifdef LED_WS2812
@@ -209,7 +209,15 @@ void disable_ADC(void)
 {
 	ADC1_CR2 = 0;
 	DMA1_CCR(1) = 0;
-	ae=0;
+// dma_clear_interrupt_flags(DMA1, 
+//                          1, 
+//                          DMA_TCIF | DMA_HTIF);
+// 						 	DMA1_CNDTR(1) = 0;
+ 	adc_disabled_cnt++;
+	if (adc_disabled_cnt >= 2)
+	{
+		volatile temp = 34;
+	}
     // dma_channel_enable(DMA1_CHANNEL1, FALSE);
     // adc_dma_mode_enable(ADC1, FALSE);
     // adc_enable(ADC1, FALSE);
@@ -217,8 +225,20 @@ void disable_ADC(void)
 
 
 void enable_ADC(void) {
-	ae=1;
-	adctrig(); // just start again...
+
+	
+	if(adc_disabled_cnt != 0)
+	{ 
+		adc_disabled_cnt--;
+
+		if (adc_disabled_cnt == 0) 
+		{
+			adctrig(); // just start again...
+		}
+		// I could have written this as
+		// if(--adc_disabled_cnt == 0) adctrig();
+		// but I find it less readable...
+	}
 }
 
 void adctrig(void) {
@@ -236,13 +256,13 @@ void tim1_cc_isr(void) {
 
 	TIM1_SR = ~TIM_SR_CC1IF;
 
-	if (!(ADC1_CR2 & ADC_CR2_DMA)||!ae) return;
+	if (!(ADC1_CR2 & ADC_CR2_DMA)||adc_disabled_cnt) return;
 	ADC1_CR2 = ADC_CR2_ADON | ADC_CR2_TSVREFE | ADC_CR2_DMA | ADC_CR2_EXTTRIG | ADC_CR2_EXTSEL_SWSTART | ADC_CR2_SWSTART;
 }
 
 void dma1_channel1_isr(void) {
 	DMA1_IFCR = DMA_IFCR_CTCIF(1);
-	return;
+	
 #ifdef LED_WS2812
 	if (DMA1_CCR(1) & DMA_CCR_DIR) {
 		DMA1_CCR(1) = 0;

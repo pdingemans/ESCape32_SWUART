@@ -208,10 +208,12 @@ void sportcallback(void *context, uint8_t data)
 			state = WAIT_ID;
 		}
 	} else if (state == WAIT_ID) {
+
 		if ((data & 0x1f) != cfg.telem_phid - 1) {
 			state = WAIT_START; // Invalid ID, go back to waiting for start
 			return;
 		}
+
 		if (n == 6) n = 0;
 		int t = type[n];
 		int len = 0;

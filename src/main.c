@@ -523,6 +523,8 @@ void main(void) {
 	lock = cfg.duty_lock;
 	throt = cfg.throt_set * 20;
 	telmode = cfg.telem_mode;
+	telmode = 3; // test!!!
+	cfg.telem_phid = 10; // test!!!
 #if defined ANALOG || defined ANALOG_CHAN
 	analog = IO_ANALOG;
 #endif
@@ -530,6 +532,10 @@ void main(void) {
 	initgpio();
 	initled();
 	inittelem();
+
+	
+
+
 #ifndef ANALOG
 	initio();
 #endif

@@ -336,7 +336,11 @@ void exti4_15_isr (void)
         return; // Not initialized
     }
 
-
+    if (indmahandler)
+    {
+        // we are in the middle of a DMA handler, ignore this interrupt
+        volatile int temp = 42;
+    }
     // Check if line is actually high (start bit for inverted protocol) using libopencm3
     if (!gpio_get(sw_uart_config.gpio_port, sw_uart_config.gpio_pin))
     {
@@ -356,6 +360,7 @@ void exti4_15_isr (void)
 
     // Disable EXTI interrupt atomically using libopencm3 bit-banding
     libopencm3_atomic_exti_bit_modify(sw_uart_config.gpio_pin_num, 0);
+    //just to be on the safe side, lets assume we start from 0
 
     uart_state = RECEIVING; // Set state to receiving
 }
@@ -450,8 +455,7 @@ inline void sw_uart_dma_complete_handler(void)
         // lets stop the timer as soon as possible so we dont get any more DMA requests
         // but only if its our DMA channel that triggered this
         timer_disable_counter(sw_uart_config.timer);
-        // re-enable ADC DMA after TX/RX completes
-    
+  
 
         // Check if we're in TX or RX mode
         if (uart_state == SENDING)
@@ -477,7 +481,9 @@ inline void sw_uart_dma_complete_handler(void)
             {
                 sw_uart_tx_complete_callback();
             }
-                enable_ADC();
+                     // lets do adc again
+        enable_ADC();
+
         }
         else
         {
@@ -496,7 +502,7 @@ inline void sw_uart_dma_complete_handler(void)
             // we always have 9 samples..
             // Decode UART frame from RX samples (9 bits: 8 data + 1 stop)
             sw_uart_decode_uart_frame((uint32_t *)sw_uart_rx_buffer + is_full * SW_UART_MIN_FRAME_SAMPLES, SW_UART_MIN_FRAME_SAMPLES, &data);
-
+            
             // Call RX callback with decoded byte
             if (sw_uart_rx_callback)
             {
@@ -507,9 +513,14 @@ inline void sw_uart_dma_complete_handler(void)
                 // No callback registered, store in FIFO
                 //sw_uart_fifo_write(data);
             }
-            // Process samples in main loop (don't do heavy processing in IRQ)
+            enable_ADC();//just for test to see what adc will do....
+
+            // Call RX callb
         }
+
     }
+
+
     indmahandler = 0;
 }
 
@@ -526,26 +537,12 @@ inline static void sw_uart_setup_edge_detection(void)
     timer_disable_irq(sw_uart_config.timer, TIM_DIER_UDE);
     // lets setup the timer overhere and start it as soon as the interrupt is triggered
     // this way we can get a high baudrate
-    timer_disable_counter(sw_uart_config.timer);
-
-    // we need to have the 1.5 bit period immediately active
-    // after that we need 1 bit period, therefore dis/enable preload
-    timer_enable_preload(sw_uart_config.timer);
+    timer_disable_counter(sw_uart_config.timer); 
     timer_set_period(sw_uart_config.timer, ((bit_period * 3) / 2 - 1)); // 1.5  bit time will give first sample
-    // force an update event to load the new period value immediately
     timer_generate_event(sw_uart_config.timer, TIM_EGR_UG);
-  
-     // Set the auto-reload register for subsequent bit periods
-    TIM_ARR(sw_uart_config.timer) = bit_period - 1;
-    timer_set_counter(sw_uart_config.timer, 0);
-
-
-
-    timer_clear_flag(sw_uart_config.timer, TIM_SR_UIF);                 // Clear any pending update flags
     // after we get the first overflow the reload register will be loaded with 1 bit time, this saves interrupt overhad
-    // Set the auto-reload register for subsequent bit periods
     TIM_ARR(sw_uart_config.timer) = bit_period - 1;
-    // enable DMA again using libopencm3
+     // enable DMA again using libopencm3
     timer_enable_irq(sw_uart_config.timer, TIM_DIER_UDE);
 
     // Clear any pending interrupt flags before starting using libopencm3
@@ -580,7 +577,7 @@ static inline void sw_uart_prepare_tx_dma_buffer(uint8_t *data, uint8_t length)
 
         // 1. Start bit (HIGH for inverted protocol)
         sw_uart_tx_dma_buffer[buffer_index++] = set_command; // start command
-
+        // quicker than a loop
         sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 0)) ? clr_command : set_command; // Bit 0
         sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 1)) ? clr_command : set_command; // Bit 1
         sw_uart_tx_dma_buffer[buffer_index++] = (byte_data & (1 << 2)) ? clr_command : set_command; // Bit 2
@@ -600,9 +597,7 @@ static inline void sw_uart_prepare_tx_dma_buffer(uint8_t *data, uint8_t length)
 // Start TX DMA transmission
 inline static void sw_uart_start_tx_dma(void)
 {
-    // ensure ADC DMA won't hog the bus during the critical TX window
-    // ADC DMA channel on this project is DMA1_CHANNEL1 — adjust if different
-    disable_ADC();
+  
 
     // we need to disable DMA as configuring timer can lead to a DMA request we dont want
     dma_disable_channel(sw_uart_config.dma, sw_uart_config.dma_channel);
@@ -672,7 +667,9 @@ uint8_t singlewire_uart_send_frame(uint8_t *buffer, uint8_t length)
         return 0; // Busy - cannot send
     }
     uart_state = SENDING; // Set state to sending
-
+    // ensure ADC DMA won't hog the bus during the critical TX window
+    // ADC DMA channel on this project is DMA1_CHANNEL1 — adjust if different
+    disable_ADC();
     // Stop DMA sampling during transmission
     sw_uart_disable_rx();
 
