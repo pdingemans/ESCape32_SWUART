@@ -52,7 +52,6 @@
 #define TX_START_DELAY ((120 * TX_USEC_DELAY) - 1) // this will calculate timer reload value
 // Calculate 0.5 bit period delay to reach middle of start bit
 
-
 // UART state enumeration
 typedef enum
 {
@@ -81,11 +80,6 @@ typedef struct
     uint32_t cpar;  // Channel peripheral address register (DMA_CPAR)
     uint32_t cmar;  // Channel memory address register (DMA_CMAR)
 } dma_fast_config_t;
-// Pre-configured DMA settings for RX and TX
-// direct register manipulation for fast configuration and bring down interrupt overhead
-// libopencm3 GPIO register addresses
-#define GPIOB_IDR_ADDR (GPIOB + 0x10)  // GPIO Input Data Register
-#define GPIOB_BSRR_ADDR (GPIOB + 0x18) // GPIO Bit Set/Reset Register
 typedef struct
 {
     uint32_t gpio_port;   // GPIO port (e.g., GPIOB)
@@ -95,10 +89,9 @@ typedef struct
     uint8_t exti_irq;     // EXTI IRQ (e.g., NVIC_EXTI9_5_IRQ)
 
     uint32_t baud_rate; // Baud rate (e.g., 57600)
+    uint32_t inverted;  // true for inverted protocol e.g. sport
     uint32_t bit_one;
     uint32_t bit_zero;
-
-
 
     uint32_t timer;                  // Timer for both TX and RX (e.g., TIM15)
     enum rcc_periph_clken timer_clk; // Timer clock enable (e.g., RCC_TIM15)
@@ -106,6 +99,14 @@ typedef struct
     uint32_t dma;        // DMA controller (e.g., DMA1)
     uint8_t dma_channel; // DMA channel (e.g., DMA_CHANNEL5)
     uint8_t dma_irq;     // DMA IRQ (e.g., NVIC_DMA1_CHANNEL4_5_6_7_IRQ)
+    // DMA sampling variables
+    uint32_t sw_uart_rx_buffer[SW_UART_RX_BUFFER_SIZE] __attribute__((aligned(4))); // Buffer for RX (9 bits: 8 data + 1 stop)
+    // TX DMA variables
+    uint32_t sw_uart_tx_dma_buffer[SW_UART_TX_DMA_BUFFER_SIZE] __attribute__((aligned(4)));
+    uint16_t sw_uart_tx_bits_count;
+    uint32_t *ccr_base; // Channel configuration register (DMA_CCR)
+    dma_fast_config_t rx_config __attribute__((aligned(4)));
+    dma_fast_config_t tx_config __attribute__((aligned(4)));
 
     // added other stuff to be able to instantiate more than one instance
     uint32_t bit_period;
@@ -113,93 +114,82 @@ typedef struct
     sw_uart_rx_callback_t rx_callback;
     void *rx_context;
 
-    // DMA sampling variables
-    uint32_t sw_uart_rx_buffer[SW_UART_RX_BUFFER_SIZE] __attribute__((aligned(4))); // Buffer for RX (9 bits: 8 data + 1 stop)
-    // TX DMA variables
-    uint32_t sw_uart_tx_dma_buffer[SW_UART_TX_DMA_BUFFER_SIZE] __attribute__((aligned(4)));
-
-    uint16_t sw_uart_tx_bits_count;
-
     // Callbacks
-
     sw_uart_rx_callback_t sw_uart_rx_callback;
     void *sw_uart_rx_context;
     sw_uart_tx_complete_callback_t sw_uart_tx_complete_callback;
 
-    dma_fast_config_t rx_config __attribute__((aligned(4)));
-    dma_fast_config_t tx_config __attribute__((aligned(4)));
-
 } sw_uart_config_t;
 
 sw_uart_config_t uarts[1] = {
-    {
-    .gpio_port = GPIOB,
-    .gpio_pin = GPIO6,
-    .gpio_pin_num = 6,
-    .exti_line = EXTI6,
-    .exti_irq = NVIC_EXTI4_15_IRQ,
+    {.gpio_port = GPIOB,
+     .gpio_pin = GPIO6,
+     .gpio_pin_num = 6,
+     .exti_line = EXTI6,
+     .exti_irq = NVIC_EXTI4_15_IRQ,
 
-    .baud_rate = 57600,
-    // masks for setting and clearing pin by DMA
-   .bit_one = 1 << 6, // use pin number otherwise compiler throws an error
-    .bit_zero = (1 << 6) << 16,     // Use gpio_pin_num value directly
+     .baud_rate = 57600,
+     // masks for setting and clearing pin by DMA
+     // the following is for inverted logic.
+     .inverted = 1,
+     .bit_one = 1 << 6,          // use pin number otherwise compiler throws an error
+     .bit_zero = (1 << 6) << 16, // Use gpio_pin_num value directly
 
-    .timer = TIM16,
-    .timer_clk = RCC_TIM16,
+     .timer = TIM16,
+     .timer_clk = RCC_TIM16,
 
-    .dma = DMA1,
-    .dma_channel = DMA_CHANNEL3,
-    .dma_irq = NVIC_DMA1_CHANNEL2_3_DMA2_CHANNEL1_2_IRQ,
+     .dma = DMA1,
+     .dma_channel = DMA_CHANNEL3,
+     .dma_irq = NVIC_DMA1_CHANNEL2_3_DMA2_CHANNEL1_2_IRQ,
 
-    .bit_period = 120000000 / 57600, // Use baud_rate value directly
-    .uart_state = IDLE,
-    .rx_callback = NULL,
-    .rx_context = NULL,
+     .bit_period = 120000000 / 57600, // Use baud_rate value directly
+     .uart_state = IDLE,
+     .rx_callback = NULL,
+     .rx_context = NULL,
 
-    .sw_uart_rx_buffer = {0},
-    .sw_uart_tx_dma_buffer = {0},
+     .sw_uart_rx_buffer = {0},
+     .sw_uart_tx_dma_buffer = {0},
 
-    .sw_uart_tx_bits_count = 0,
+     .sw_uart_tx_bits_count = 0,
 
-    .sw_uart_rx_callback = NULL,
-    .sw_uart_rx_context = NULL,
-    .sw_uart_tx_complete_callback = NULL,
-    .rx_config = {
-        .ccr = DMA_CCR_PL_VERY_HIGH |              // Priority: Very High
-               DMA_CCR_MSIZE_32BIT |               // Memory: 32-bit
-               DMA_CCR_PSIZE_32BIT |               // Peripheral: 32-bit
-               DMA_CCR_MINC |                      // Memory increment
-               DMA_CCR_CIRC |                      // Circular mode enabled
-               DMA_CCR_TCIE |                      // Transfer complete interrupt
-               DMA_CCR_HTIE |                      // Half transfer interrupt enabled
-               DMA_CCR_TEIE,                       // Transfer error interrupt
-        .cndtr = SW_UART_RX_BUFFER_SIZE,           // Number of data transfers
-        .cpar = GPIOB_IDR_ADDR,                    // GPIOB IDR address
-        .cmar = (uint32_t)&uarts[0].sw_uart_rx_buffer // RX buffer address
-    },
+     .sw_uart_rx_callback = NULL,
+     .sw_uart_rx_context = NULL,
+     .sw_uart_tx_complete_callback = NULL,
+     .ccr_base = NULL,
+     .rx_config = {
+         .ccr = DMA_CCR_PL_VERY_HIGH |                 // Priority: Very High
+                DMA_CCR_MSIZE_32BIT |                  // Memory: 32-bit
+                DMA_CCR_PSIZE_32BIT |                  // Peripheral: 32-bit
+                DMA_CCR_MINC |                         // Memory increment
+                DMA_CCR_CIRC |                         // Circular mode enabled
+                DMA_CCR_TCIE |                         // Transfer complete interrupt
+                DMA_CCR_HTIE |                         // Half transfer interrupt enabled
+                DMA_CCR_TEIE,                          // Transfer error interrupt
+         .cndtr = SW_UART_RX_BUFFER_SIZE,              // Number of data transfers
+         .cpar = (uint32_t)&GPIOB_IDR,                 // GPIOB IDR address
+         .cmar = (uint32_t)&uarts[0].sw_uart_rx_buffer // RX buffer address
+     },
 
-    .tx_config = {
-        .ccr = DMA_CCR_PL_VERY_HIGH | // Priority: Very High
-               DMA_CCR_MSIZE_32BIT |  // Memory: 32-bit
-               DMA_CCR_PSIZE_32BIT |  // Peripheral: 32-bit
-               DMA_CCR_MINC |         // Memory increment
-               DMA_CCR_DIR |          // Direction: Memory to Peripheral
-               DMA_CCR_TCIE |         // Transfer complete interrupt
-               DMA_CCR_TEIE,          // Transfer error interrupt
-        .cndtr = 0,                   // Set at runtime (TX bit count)
-        .cpar = GPIOB_BSRR_ADDR,      // GPIOB BSRR address for set/reset
-        .cmar = 0                     // Set at runtime (TX buffer)
-    }
+     .tx_config = {
+         .ccr = DMA_CCR_PL_VERY_HIGH |                     // Priority: Very High
+                DMA_CCR_MSIZE_32BIT |                      // Memory: 32-bit
+                DMA_CCR_PSIZE_32BIT |                      // Peripheral: 32-bit
+                DMA_CCR_MINC |                             // Memory increment
+                DMA_CCR_DIR |                              // Direction: Memory to Peripheral
+                DMA_CCR_TCIE |                             // Transfer complete interrupt
+                DMA_CCR_TEIE,                              // Transfer error interrupt
+         .cndtr = 0,                                       // Set at runtime (TX bit count)
+         .cpar = (uint32_t)&GPIOB_BSRR,                    // GPIOB BSRR address for set/reset
+         .cmar = (uint32_t)&uarts[0].sw_uart_tx_dma_buffer // tx buffer adrwaa
+     }
 
-}
-};
+    }};
 
 #define config_PB6 uarts[0]
 
-
 // Public API functions
 void sw_uart_init(sw_uart_config_t *config);
-void sw_uart_deinit(void);
+
 // Data transmission
 void sw_uart_send_byte(uint8_t data);
 // static void sw_uart_process_dma_samples(void);
@@ -221,89 +211,29 @@ static inline void sw_uart_enable_tx(sw_uart_config_t *config);
 
 // testing stuff
 static volatile uint8_t indmahandler = 0;
-// Static configuration and state
-// lets initialize it to zero
-// so we can test if baudrate == 0 we are not initialized and return from public functions
-static sw_uart_config_t sw_uart_config = {0};
-
-// Pin configuration
-
-// Pre-configured DMA settings for RX and TX
-// direct register manipulation for fast configuration and bring down interrupt overhead
-// libopencm3 GPIO register addresses
-#define GPIOB_IDR_ADDR (GPIOB + 0x10)  // GPIO Input Data Register
-#define GPIOB_BSRR_ADDR (GPIOB + 0x18) // GPIO Bit Set/Reset Register
-
-// we do double buffering for RX
-// so our buffer needs to be twice the amount of samples for one byte
-// we need interrupts on half and full transfer
-// static const dma_fast_config_t dma_rx_config __attribute__((aligned(4))) = {
-//     .ccr = DMA_CCR_PL_VERY_HIGH |       // Priority: Very High
-//            DMA_CCR_MSIZE_32BIT |        // Memory: 32-bit
-//            DMA_CCR_PSIZE_32BIT |        // Peripheral: 32-bit
-//            DMA_CCR_MINC |               // Memory increment
-//            DMA_CCR_CIRC |               // Circular mode enabled
-//            DMA_CCR_TCIE |               // Transfer complete interrupt
-//            DMA_CCR_HTIE |               // Half transfer interrupt enabled
-//            DMA_CCR_TEIE,                // Transfer error interrupt
-//     .cndtr = SW_UART_RX_BUFFER_SIZE,    // Number of data transfers
-//     .cpar = GPIOB_IDR_ADDR,             // GPIOB IDR address
-//     .cmar = (uint32_t)sw_uart_rx_buffer // RX buffer address
-// };
-
-// static const dma_fast_config_t dma_tx_config __attribute__((aligned(4))) = {
-//     .ccr = DMA_CCR_PL_VERY_HIGH | // Priority: Very High
-//            DMA_CCR_MSIZE_32BIT |  // Memory: 32-bit
-//            DMA_CCR_PSIZE_32BIT |  // Peripheral: 32-bit
-//            DMA_CCR_MINC |         // Memory increment
-//            DMA_CCR_DIR |          // Direction: Memory to Peripheral
-//            DMA_CCR_TCIE |         // Transfer complete interrupt
-//            DMA_CCR_TEIE,          // Transfer error interrupt
-//     .cndtr = 0,                   // Set at runtime (TX bit count)
-//     .cpar = GPIOB_BSRR_ADDR,      // GPIOB BSRR address for set/reset
-//     .cmar = 0                     // Set at runtime (TX buffer)
-// };
-
-// DMA register offsets (from libopencm3 dma_common_l1f013.h)
-// Each DMA channel has 5 registers: CCR, CNDTR, CPAR, CMAR, reserved (0x14 = 20 bytes total)
-// we cant use the defines as it uses MMMIO32 macro which dereferences the calculated address :(
-#define DMA_CCR_OFFSET 0x08   // Channel Configuration Register offset from DMA base
-#define DMA_CHANNEL_SIZE 0x14 // Size of each channel register block (20 bytes)
 
 // Fast DMA configuration for RX - direct struct copy to registers
 static inline void sw_uart_configure_dma_rx(sw_uart_config_t *config)
 {
-    uint32_t dma_base = config->dma;
-    uint8_t channel = config->dma_channel;
-
-    // Calculate CCR address: DMA_BASE + CCR_OFFSET + (CHANNEL_SIZE * (channel - 1))
-    uint32_t ccr_addr = dma_base + DMA_CCR_OFFSET + (DMA_CHANNEL_SIZE * (channel - 1));
-
     // Disable channel first (clear EN bit)
-    *(volatile uint32_t *)ccr_addr &= ~DMA_CCR_EN;
+    *config->ccr_base &= ~DMA_CCR_EN;
 
     // Fast block copy - struct is aligned to register layout
-    *(volatile dma_fast_config_t *)ccr_addr = config->rx_config;
+    *(dma_fast_config_t *)config->ccr_base = config->rx_config;
 }
 
 // Fast DMA configuration for TX - direct struct copy to registers
 static inline void sw_uart_configure_dma_tx(sw_uart_config_t *config, uint16_t bit_count)
 {
-    // Calculate CCR address: DMA_BASE + CCR_OFFSET + (CHANNEL_SIZE * (channel - 1))
-    uint32_t ccr_addr = config->dma + DMA_CCR_OFFSET + (DMA_CHANNEL_SIZE * (config->dma_channel - 1));
-
-    // config->tx_config = dma_tx_config; // Copy template
 
     // Set runtime values
     config->tx_config.cndtr = bit_count;
-    config->tx_config.cpar = GPIOB_BSRR_ADDR; // Use libopencm3 style address
-    config->tx_config.cmar = (uint32_t)config->sw_uart_tx_dma_buffer;
 
     // Disable channel first (clear EN bit)
-    *(volatile uint32_t *)ccr_addr &= ~DMA_CCR_EN;
+    *config->ccr_base &= ~DMA_CCR_EN;
 
     // Fast block copy - struct is aligned to register layout
-    *(volatile dma_fast_config_t *)ccr_addr = config->tx_config;
+    *(dma_fast_config_t *)config->ccr_base = config->tx_config;
 }
 
 // Initialize software UART with given configuration
@@ -314,8 +244,7 @@ void sw_uart_init(sw_uart_config_t *config)
     // Initialize state variables
     config->sw_uart_tx_bits_count = 0;
     config->uart_state = IDLE;
-
-    sw_uart_config = *config; // Copy configuration first!
+    config->ccr_base = (uint32_t *)&DMA_CCR(config->dma, config->dma_channel);
 
     // Enable required clocks using libopencm3
     rcc_periph_clock_enable(RCC_GPIOB);         // Enable GPIOB clock
@@ -341,30 +270,7 @@ void sw_uart_init(sw_uart_config_t *config)
 }
 void singlewire_uart_init()
 {
-
-    // Software UART configuration for Sport telemetry
-    // PB6, 57600 baud, inverted logic, TIM15 + DMA5
-    sw_uart_config_t uart_config;
-
-    uart_config.gpio_port = SWUART_GPIO_PORT;
-    uart_config.gpio_pin = SWUART_GPIO_PIN;         // libopencm3 GPIO pin constant
-    uart_config.gpio_pin_num = SWUART_GPIO_PIN_NUM; // Pin number for PB6
-    uart_config.baud_rate = SWUART_BAUD_RATE;
-
-    // EXTI configuration for PB6 which is the Sport telemetry input pin
-    uart_config.exti_line = SWUART_EXTI_LINE; // libopencm3 EXTI line
-    uart_config.exti_irq = SWUART_EXTI_IRQ;   // libopencm3 EXTI IRQ for F421 (EXTI4-15 shared handler)
-
-    // Timer configuration (using TIM15 for both TX and RX)
-    uart_config.timer = SWUART_TIMER;         // libopencm3 timer
-    uart_config.timer_clk = SWUART_TIMER_CLK; // libopencm3 timer clock
-
-    // DMA configuration (using DMA1 Channel 5)
-    uart_config.dma = SWUART_DMA;                 // libopencm3 DMA controller
-    uart_config.dma_channel = SWUART_DMA_CHANNEL; // libopencm3 DMA channel
-    uart_config.dma_irq = SWUART_DMA_IRQ;         // libopencm3 DMA IRQ
-
-    sw_uart_init(&uart_config);
+    sw_uart_init(&uarts[0]);
 }
 
 // Configure pin for reception with DMA sampling
@@ -470,35 +376,50 @@ inline static void sw_uart_decode_uart_frame(sw_uart_config_t *config, uint32_t 
 {
 
     uint32_t pin_mask = (1 << config->gpio_pin_num);
+    uint32_t inverted = config->inverted;
     *decoded_byte = 0;
-    // Samples are taken at bit centers: [bit0][bit1][bit2][bit3][bit4][bit5][bit6][bit7][stop]
-    // Samples 0-7 = data bits (LSB first, inverted)
-    // Sample 8 = stop bit (should be HIGH/0 for inverted protocol)
-
-    // Verify stop bit is HIGH (0 for inverted protocol)
-    uint8_t stop_bit = (samples[8] & pin_mask) ? 1 : 0;
-    if (stop_bit != 0)
+    // we have 2 times same code, here for speed reasons to skip al lot if/else
+    if (inverted)
     {
-        return; // Invalid stop bit for inverted protocol
-    }
+        // Samples are taken at bit centers: [bit0][bit1][bit2][bit3][bit4][bit5][bit6][bit7][stop]
+        // Samples 0-7 = data bits (LSB first, inverted)
+        // Sample 8 = stop bit (should be HIGH/0 for inverted protocol)
 
-    // Decode 8 data bits (LSB first, inverted logic)
-    for (uint8_t bit = 0; bit < 8; bit++)
-    {
-        // these instructions make complete call 563 ns
-        ///  uint8_t data_bit = (samples[bit] & pin_mask) ? 0 : 1; // Inverted logic: HIGH=0, LOW=1
-        //  if (data_bit)
-        //  {
-        //      decoded_byte |= (1 << bit); // Set bit in LSB-first order
-        //  }
-
-        // these instructions make complete call 500 ns , 437 ns for all 1's, 500 ns for all 0's
-        // Use inverted logic: HIGH=0, LOW=1
-        // This is more efficient than using a separate variable for data_bit
-        // Directly set bit in decoded byte based on inverted logic
-        if (!(samples[bit] & pin_mask))
+        // Verify stop bit is HIGH (0 for inverted protocol)
+        uint8_t stop_bit = (samples[8] & pin_mask) ? 1 : 0;
+        if (stop_bit != 0)
         {
-            *decoded_byte |= (1 << bit); // Set bit in LSB-first order
+            return; // Invalid stop bit for inverted protocol
+        }
+
+        // Decode 8 data bits (LSB first, inverted logic)
+        for (uint8_t bit = 0; bit < 8; bit++)
+        {
+            // these instructions make complete call 500 ns , 437 ns for all 1's, 500 ns for all 0's
+            // Use inverted logic: HIGH=0, LOW=1
+            // This is more efficient than using a separate variable for data_bit
+            // Directly set bit in decoded byte based on inverted logic
+            if (!(samples[bit] & pin_mask))
+            {
+                *decoded_byte |= (1 << bit); // Set bit in LSB-first order
+            }
+        }
+    }
+    else
+    {
+        // Verify stop bit is HIGH (1 for normal protocol)
+        uint8_t stop_bit = (samples[8] & pin_mask) ? 0 : 1;
+        if (stop_bit != 0)
+        {
+            return; // Invalid stop bit for normal protocol
+        }
+        // Decode 8 data bits (LSB first, normal logic)
+        for (uint8_t bit = 0; bit < 8; bit++)
+        {
+            if ((samples[bit] & pin_mask))
+            {
+                *decoded_byte |= (1 << bit); // Set bit in LSB-first order
+            }
         }
     }
 }
@@ -631,8 +552,8 @@ static inline void sw_uart_prepare_tx_dma_buffer(sw_uart_config_t *config, uint8
     // uint16_t pin_mask = (1 << config->gpio_pin_num);
     // uint32_t set_command = pin_mask;       // Set bit (HIGH)
     // uint32_t clr_command = pin_mask << 16; // Clear bit (LOW) - upper 16 bits of SCR
-    set_command = config->bit_one; // Set bit (HIGH)
-    clr_command = config->bit_zero; // Clear bit (LOW) - upper 16 bits of SCR
+    uint32_t set_command = config->bit_one;  // Set bit (HIGH)
+    uint32_t clr_command = config->bit_zero; // Clear bit (LOW) - upper 16 bits of SCR
     // the following code takes ~16 usec,
     // Process each byte
     for (uint8_t byte_idx = 0; byte_idx < length && buffer_index < SW_UART_TX_DMA_BUFFER_SIZE - 11; byte_idx++)

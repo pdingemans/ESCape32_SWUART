@@ -525,7 +525,7 @@ void resetcom(void) {
 }
 
 static void delayf(void) {
-	TIM6_EGR = TIM_EGR_UG; // Reset arming timeout
+	TIM14_EGR = TIM_EGR_UG; // Reset arming timeout
 	if (!(TIM1_SR & TIM_SR_UIF)) return;
 	TIM1_SR = ~TIM_SR_UIF;
 	int a = TIM1_CCR1;
@@ -624,14 +624,14 @@ void playsound(const char *buf, int vol) { // AU file format, 8-bit linear PCM, 
 	TIM1_CCR3 = 0;
 	TIM1_ARR = CLK_KHZ / 24 - 1;
 	TIM1_EGR = TIM_EGR_UG | TIM_EGR_COMG;
-	TIM6_PSC = 0;
-	TIM6_ARR = CLK_CNT(__builtin_bswap32(hdr[4])) - 1;
-	TIM6_EGR = TIM_EGR_UG;
-	TIM6_CR1 = TIM_CR1_CEN;
+	TIM14_PSC = 0;
+	TIM14_ARR = CLK_CNT(__builtin_bswap32(hdr[4])) - 1;
+	TIM14_EGR = TIM_EGR_UG;
+	TIM14_CR1 = TIM_CR1_CEN;
 	buf += __builtin_bswap32(hdr[1]);
 	for (int len = __builtin_bswap32(hdr[2]);;) {
-		if (!(TIM6_SR & TIM_SR_UIF)) continue;
-		TIM6_SR = ~TIM_SR_UIF;
+		if (!(TIM14_SR & TIM_SR_UIF)) continue;
+		TIM14_SR = ~TIM_SR_UIF;
 		if (len-- <= 0) break;
 		int8_t x = *buf++;
 		TIM1_CR1 = TIM_CR1_CEN | TIM_CR1_ARPE | TIM_CR1_UDIS;
@@ -639,7 +639,7 @@ void playsound(const char *buf, int vol) { // AU file format, 8-bit linear PCM, 
 		TIM1_CCR3 = DEAD_TIME + ((127 - x) * vol * CLK_MHZ >> 13);
 		TIM1_CR1 = TIM_CR1_CEN | TIM_CR1_ARPE;
 	}
-	TIM6_CR1 = 0;
+	TIM14_CR1 = 0;
 	resetcom();
 	busy = 0;
 }

@@ -54,7 +54,7 @@ void init(void) {
 	RCC_APB1RSTR = 0;
 	RCC_AHBENR = RCC_AHBENR_DMAEN | RCC_AHBENR_SRAMEN | RCC_AHBENR_GPIOAEN | RCC_AHBENR_GPIOBEN;
 	RCC_APB2ENR = RCC_APB2ENR_SYSCFGCOMPEN | RCC_APB2ENR_ADCEN | RCC_APB2ENR_TIM1EN | RCC_APB2ENR_USART1EN;
-	RCC_APB1ENR = RCC_APB1ENR_TIM3EN | RCC_APB1ENR_TIM6EN | RCC_APB1ENR_WWDGEN;
+	RCC_APB1ENR = RCC_APB1ENR_TIM3EN | RCC_APB1ENR_TIM14EN | RCC_APB1ENR_WWDGEN;
 	SCB_VTOR = (uint32_t)_rom; // Set vector table address
 
 	RCC_CFGR &= ~RCC_CFGR_SW_PLL;
@@ -104,9 +104,9 @@ void init(void) {
 	TIM3_CCER = TIM_CCER_CC1E; // IC1 on rising edge on TI1 (COMP_OUT)
 
 	ADC1_CR2 = ADC_CR2_ADON | ADC_CR2_TSVREFE;
-	TIM6_ARR = CLK_MHZ * 3 - 1;
-	TIM6_CR1 = TIM_CR1_CEN | TIM_CR1_OPM;
-	while (TIM6_CR1 & TIM_CR1_CEN); // Wait for 3us (RM 18.4.2.1)
+	TIM14_ARR = CLK_MHZ * 3 - 1;
+	TIM14_CR1 = TIM_CR1_CEN | TIM_CR1_OPM;
+	while (TIM14_CR1 & TIM_CR1_CEN); // Wait for 3us (RM 18.4.2.1)
 	ADC1_CR2 |= ADC_CR2_CAL;
 	while (ADC1_CR2 & ADC_CR2_CAL);
 	ADC1_CR1 = ADC_CR1_SCAN;
@@ -209,18 +209,12 @@ void disable_ADC(void)
 {
 	ADC1_CR2 = 0;
 	DMA1_CCR(1) = 0;
-// dma_clear_interrupt_flags(DMA1, 
-//                          1, 
-//                          DMA_TCIF | DMA_HTIF);
-// 						 	DMA1_CNDTR(1) = 0;
  	adc_disabled_cnt++;
 	if (adc_disabled_cnt >= 2)
 	{
 		volatile temp = 34;
 	}
-    // dma_channel_enable(DMA1_CHANNEL1, FALSE);
-    // adc_dma_mode_enable(ADC1, FALSE);
-    // adc_enable(ADC1, FALSE);
+
 }
 
 
