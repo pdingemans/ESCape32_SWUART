@@ -59,8 +59,8 @@ void inittelem(void) {
 #ifdef AT32F4
 #warning "AT32F4 IS defined - using AT32F4 path"
 // here we use the sw uart init function to set inverted and 57600 baud
-			singlewire_uart_init(); // sets everything from dma to interrupt line
-			sw_uart_set_rx_callback(sportcallback,NULL);
+			singlewire_uart_init(0); // sets everything from dma to interrupt line
+			sw_uart_set_rx_callback(0, sportcallback, NULL);
 			// lets just jump out of this function and use the sw uart
 			// no other code for at32f421 is necessary as everything is done in the singlewire_uart.c
 			return;
@@ -226,7 +226,7 @@ void sportcallback(void *context, uint8_t data)
 			case 5: len = sportresp(t, erpm / (cfg.telem_poles >> 1)); break;
 		}
 		if (len > 0) {
-			singlewire_uart_send_frame((uint8_t*)iobuf, len);
+			singlewire_uart_send_frame(0, (uint8_t*)iobuf, len);
 		}
 		state = WAIT_START; // Go back to waiting for start
 	}

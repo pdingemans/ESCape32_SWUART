@@ -118,10 +118,11 @@ typedef struct
     sw_uart_rx_callback_t sw_uart_rx_callback;
     void *sw_uart_rx_context;
     sw_uart_tx_complete_callback_t sw_uart_tx_complete_callback;
+    void *sw_uart_tx_context;
 
 } sw_uart_config_t;
 
-sw_uart_config_t uarts[1] = {
+sw_uart_config_t uarts[2] = {
     {.gpio_port = GPIOB,
      .gpio_pin = GPIO6,
      .gpio_pin_num = 6,
@@ -141,6 +142,7 @@ sw_uart_config_t uarts[1] = {
      .dma = DMA1,
      .dma_channel = DMA_CHANNEL3,
      .dma_irq = NVIC_DMA1_CHANNEL2_3_DMA2_CHANNEL1_2_IRQ,
+
 
      .bit_period = 120000000 / 57600, // Use baud_rate value directly
      .uart_state = IDLE,
@@ -181,11 +183,72 @@ sw_uart_config_t uarts[1] = {
          .cndtr = 0,                                       // Set at runtime (TX bit count)
          .cpar = (uint32_t)&GPIOB_BSRR,                    // GPIOB BSRR address for set/reset
          .cmar = (uint32_t)&uarts[0].sw_uart_tx_dma_buffer // tx buffer adrwaa
+     }},
+    {
+    .gpio_port = GPIOB,
+    .gpio_pin = GPIO4,
+    .gpio_pin_num = 4,
+    .exti_line = EXTI4,
+    .exti_irq = NVIC_EXTI4_15_IRQ,
+
+     .baud_rate = 38400,
+     // masks for setting and clearing pin by DMA
+     // the following is for non-inverted logic.
+     .inverted = 0,
+     .bit_one = (1 << 4) << 16, // Use gpio_pin_num value directly
+     .bit_zero = 1 << 4,        // use pin number otherwise compiler throws an error
+
+     .timer = TIM15,
+     .timer_clk = RCC_TIM15,
+
+     .dma = DMA1,
+     .dma_channel = DMA_CHANNEL5,
+     .dma_irq = NVIC_DMA1_CHANNEL4_7_DMA2_CHANNEL3_5_IRQ,
+     .bit_period = 120000000 / 38400, // Use baud_rate value directly
+     .uart_state = IDLE,
+     .rx_callback = NULL,
+     .rx_context = NULL,
+
+     .sw_uart_rx_buffer = {0},
+     .sw_uart_tx_dma_buffer = {0},
+
+     .sw_uart_tx_bits_count = 0,
+
+     .sw_uart_rx_callback = NULL,
+     .sw_uart_rx_context = NULL,
+     .sw_uart_tx_complete_callback = NULL,
+     .ccr_base = NULL,
+     .rx_config = {
+         .ccr = DMA_CCR_PL_VERY_HIGH |                 // Priority: Very High
+                DMA_CCR_MSIZE_32BIT |                  // Memory: 32-bit
+                DMA_CCR_PSIZE_32BIT |                  // Peripheral: 32-bit
+                DMA_CCR_MINC |                         // Memory increment
+                DMA_CCR_CIRC |                         // Circular mode enabled
+                DMA_CCR_TCIE |                         // Transfer complete interrupt
+                DMA_CCR_HTIE |                         // Half transfer interrupt enabled
+                DMA_CCR_TEIE,                          // Transfer error interrupt
+         .cndtr = SW_UART_RX_BUFFER_SIZE,              // Number of data transfers
+         .cpar = (uint32_t)&GPIOB_IDR,                 // GPIOB IDR address
+         .cmar = (uint32_t)&uarts[1].sw_uart_rx_buffer // RX buffer address
+     },
+
+     .tx_config = {
+         .ccr = DMA_CCR_PL_VERY_HIGH |                     // Priority: Very High
+                DMA_CCR_MSIZE_32BIT |                      // Memory: 32-bit
+                DMA_CCR_PSIZE_32BIT |                      // Peripheral: 32-bit
+                DMA_CCR_MINC |                             // Memory increment
+                DMA_CCR_DIR |                              // Direction: Memory to Peripheral
+                DMA_CCR_TCIE |                             // Transfer complete interrupt
+                DMA_CCR_TEIE,                              // Transfer error interrupt
+         .cndtr = 0,                                       // Set at runtime (TX bit count)
+         .cpar = (uint32_t)&GPIOB_BSRR,                    // GPIOB BSRR address for set/reset
+         .cmar = (uint32_t)&uarts[1].sw_uart_tx_dma_buffer // tx buffer adrwaa
      }
 
     }};
 
-#define config_PB6 uarts[0]
+#define PB6_SW_UART 0
+#define PB4_SW_UART 1
 
 // Public API functions
 void sw_uart_init(sw_uart_config_t *config);
@@ -197,7 +260,7 @@ static void sw_uart_decode_uart_frame(sw_uart_config_t *config, uint32_t *sample
 static void sw_uart_setup_edge_detection(sw_uart_config_t *config);
 
 static void sw_uart_start_dma_sampling(sw_uart_config_t *config);
-
+static void sw_uart_dma_complete_handler(sw_uart_config_t *config);
 static void sw_uart_prepare_tx_dma_buffer(sw_uart_config_t *config, uint8_t *data, uint8_t length);
 static void sw_uart_start_tx_dma(sw_uart_config_t *config);
 static void sw_uart_stop_dma_sampling(sw_uart_config_t *config);
@@ -253,8 +316,12 @@ void sw_uart_init(sw_uart_config_t *config)
 
     // Configure timer for bit-rate sampling using libopencm3
     timer_set_mode(config->timer, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
+    timer_set_prescaler(config->timer, 0); // No prescaler, timer runs at system clock
     timer_enable_preload(config->timer);
     timer_continuous_mode(config->timer);
+    
+    // Disable timer overflow interrupt (we only use DMA requests)
+    timer_disable_irq(config->timer, TIM_DIER_UIE);
 
     nvic_set_priority(config->dma_irq, 4);
     nvic_enable_irq(config->dma_irq);
@@ -268,16 +335,16 @@ void sw_uart_init(sw_uart_config_t *config)
 
     return;
 }
-void singlewire_uart_init()
+void singlewire_uart_init(uint8_t uart_id)
 {
-    sw_uart_init(&uarts[0]);
+    sw_uart_init(&uarts[uart_id]);
 }
 
 // Configure pin for reception with DMA sampling
 static inline void sw_uart_enable_rx(sw_uart_config_t *config)
 {
     // Configure GPIO pin for input with pull-down using libopencm3
-    gpio_mode_setup(config->gpio_port, GPIO_MODE_INPUT, GPIO_PUPD_PULLDOWN, config->gpio_pin);
+    config->inverted?gpio_mode_setup(config->gpio_port, GPIO_MODE_INPUT, GPIO_PUPD_PULLDOWN, config->gpio_pin):gpio_mode_setup(config->gpio_port, GPIO_MODE_INPUT, GPIO_PUPD_PULLUP, config->gpio_pin);
 
     // Configure EXTI for rising edge detection to trigger delayed DMA start
     sw_uart_setup_edge_detection(config);
@@ -296,18 +363,37 @@ static inline void sw_uart_disable_rx(sw_uart_config_t *config)
 }
 
 // Set RX callback
-void sw_uart_set_rx_callback(sw_uart_rx_callback_t callback, void *context)
+void sw_uart_set_rx_callback(uint8_t uart_id, sw_uart_rx_callback_t callback, void *context)
 {
-    sw_uart_config_t *config = &config_PB6;
+    sw_uart_config_t *config = &uarts[uart_id];
     config->sw_uart_rx_callback = callback;
     config->sw_uart_rx_context = context; // Store context for callback
 }
+// Set RX callback
+void sw_uart_set_tx_callback(uint8_t uart_id, sw_uart_tx_callback_t callback, void *context)
+{
+    sw_uart_config_t *config = &uarts[uart_id];
+    config->sw_uart_tx_complete_callback = callback;
+    config->sw_uart_tx_context = context; // Store context for callback
+}
 
 // EXTI interrupt handler (call from MCU interrupt handler)
+void sw_uart_input_irq(uint8_t uart_id); // foward declaration
 #define sw_uart_exti_handler exti4_15_isr
-void exti4_15_isr(void)
+void exti4_15_isr()
 {
-    sw_uart_config_t *config = &config_PB6;
+    // Check which EXTI line triggered the interrupt
+    if (exti_get_flag_status(EXTI4)) {
+        sw_uart_input_irq(PB4_SW_UART); // PB4 interrupt
+    }
+    if (exti_get_flag_status(EXTI6)) {
+        sw_uart_input_irq(PB6_SW_UART); // PB6 interrupt
+    }
+}
+
+void sw_uart_input_irq(uint8_t uart_id)
+{
+    sw_uart_config_t *config = &uarts[uart_id];
     if (config->baud_rate == 0)
     {
         return; // Not initialized
@@ -319,12 +405,27 @@ void exti4_15_isr(void)
         volatile int temp = 42;
     }
     // Check if line is actually high (start bit for inverted protocol) using libopencm3
-    if (!gpio_get(config->gpio_port, config->gpio_pin))
+    if (config->inverted)
     {
-        // Line is low, this should not happen on rising edge - ignore interrupt
-        exti_reset_request(config->exti_line);
-        return;
+        // Inverted protocol: line should be high for start bit
+        if (!gpio_get(config->gpio_port, config->gpio_pin))
+        {
+            // Line is high, this should not happen on rising edge - ignore interrupt
+            exti_reset_request(config->exti_line);
+            return;
+        }
     }
+    else
+    {
+        // Normal protocol: line should be low for start bit
+        if (gpio_get(config->gpio_port, config->gpio_pin))
+        {
+            // Line is low, this should not happen on rising edge - ignore interrupt
+            exti_reset_request(config->exti_line);
+            return;
+        }
+    }
+
 
     // lets not do ADC when we are receiving, it interferes heavily with timer DMA requests
     disable_ADC();
@@ -428,12 +529,15 @@ inline static void sw_uart_decode_uart_frame(sw_uart_config_t *config, uint32_t 
 // Prototype provided by libopencm3/stm32/f0/nvic.h
 void dma1_channel2_3_dma2_channel1_2_isr(void)
 {
-    sw_uart_dma_complete_handler();
+    sw_uart_dma_complete_handler(&uarts[0]);
 }
-
-inline void sw_uart_dma_complete_handler(void)
+void dma1_channel4_7_dma2_channel3_5_isr(void)
 {
-    sw_uart_config_t *config = &config_PB6;
+    sw_uart_dma_complete_handler(&uarts[1]);
+}
+inline void sw_uart_dma_complete_handler(sw_uart_config_t *config)
+{
+    //sw_uart_config_t *config = &uarts[0];
     if (config->baud_rate == 0)
     {
         return; // Not initialized so we skip the whole thing
@@ -462,7 +566,7 @@ inline void sw_uart_dma_complete_handler(void)
             config->sw_uart_tx_bits_count = 0;
 
             // Set line to idle state (LOW for inverted protocol) using libopencm3
-            gpio_clear(config->gpio_port, config->gpio_pin);
+             config->inverted?gpio_clear(config->gpio_port, config->gpio_pin):gpio_set(config->gpio_port, config->gpio_pin);
 
             sw_uart_enable_rx(config); // Switch back to RX mode
             config->uart_state = IDLE; // Reset state to IDLE
@@ -519,14 +623,14 @@ inline static void sw_uart_setup_edge_detection(sw_uart_config_t *config)
     // Configure EXTI line mapping using libopencm3
     exti_select_source(config->exti_line, config->gpio_port);
     // Configure EXTI for rising edge detection using libopencm3
-    exti_set_trigger(config->exti_line, EXTI_TRIGGER_RISING);
+    exti_set_trigger(config->exti_line, EXTI_TRIGGER_RISING+!config->inverted);
 
     // Disable DMA channel using libopencm3
     timer_disable_irq(config->timer, TIM_DIER_UDE);
     // lets setup the timer overhere and start it as soon as the interrupt is triggered
     // this way we can get a high baudrate
     timer_disable_counter(config->timer);
-    timer_set_period(config->timer, ((config->bit_period * 3) / 2 - 1)); // 1.5  bit time will give first sample
+    timer_set_period(config->timer, ((config->bit_period * 11) / 10 - 1)); // 1.1  bit time will give first sample to compensate for other interrupts....
     timer_generate_event(config->timer, TIM_EGR_UG);
     // after we get the first overflow the reload register will be loaded with 1 bit time, this saves interrupt overhad
     TIM_ARR(config->timer) = config->bit_period - 1;
@@ -629,19 +733,19 @@ void sw_uart_enable_tx(sw_uart_config_t *config)
     gpio_set_output_options(config->gpio_port, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, config->gpio_pin);
 
     // Inverted logic: set initial idle state to LOW using libopencm3
-    gpio_clear(config->gpio_port, config->gpio_pin);
+    config->inverted?gpio_clear(config->gpio_port, config->gpio_pin):gpio_set(config->gpio_port, config->gpio_pin);
 }
 
-// Send a single byte
-void sw_uart_send_byte(uint8_t data)
-{
-    singlewire_uart_send_frame(&data, 1);
-}
+// // Send a single byte
+// void sw_uart_send_byte(uint8_t data)
+// {
+//     singlewire_uart_send_frame(&data, 1);
+// }
 
 // Send a frame of bytes
-uint8_t singlewire_uart_send_frame(uint8_t *buffer, uint8_t length)
+uint8_t singlewire_uart_send_frame(uint8_t uart_id, uint8_t*buffer, uint8_t length)
 {
-    sw_uart_config_t *config = &config_PB6;
+    sw_uart_config_t* config = &uarts[uart_id];
     if (!buffer || length == 0 || length > SW_UART_TX_MAX_FRAME_SIZE)
         return 0;
 
@@ -657,15 +761,15 @@ uint8_t singlewire_uart_send_frame(uint8_t *buffer, uint8_t length)
     // ADC DMA channel on this project is DMA1_CHANNEL1 — adjust if different
     disable_ADC();
     // Stop DMA sampling during transmission
-    sw_uart_disable_rx(&config_PB6);
+    sw_uart_disable_rx(config);
 
     // Configure pin for transmission
-    sw_uart_enable_tx(&config_PB6);
+    sw_uart_enable_tx(config);
     cm_enable_interrupts();
     // Prepare DMA buffer with frame data
-    sw_uart_prepare_tx_dma_buffer(&config_PB6, buffer, length);
+    sw_uart_prepare_tx_dma_buffer(config, buffer, length);
 
     // Start DMA transmission
-    sw_uart_start_tx_dma(&config_PB6);
+    sw_uart_start_tx_dma(config);
     return 1;
 }

@@ -485,18 +485,18 @@ void pend_sv_handler(void) {
 void hard_fault_handler(void) {
 	ledctl(1); // Indicate error
 	TIM1_EGR = TIM_EGR_BG;
-	TIM14_PSC = CLK_KHZ / 10 - 1; // 0.1ms resolution
-	TIM14_ARR = 9999;
-	TIM14_EGR = TIM_EGR_UG;
-	TIM14_SR = ~TIM_SR_UIF;
-	TIM14_CR1 = TIM_CR1_CEN | TIM_CR1_OPM;
-	while (TIM14_CR1 & TIM_CR1_CEN); // Wait for 1s
+	TIM6_PSC = CLK_KHZ / 10 - 1; // 0.1ms resolution
+	TIM6_ARR = 9999;
+	TIM6_EGR = TIM_EGR_UG;
+	TIM6_SR = ~TIM_SR_UIF;
+	TIM6_CR1 = TIM_CR1_CEN | TIM_CR1_OPM;
+	while (TIM6_CR1 & TIM_CR1_CEN); // Wait for 1s
 	WWDG_CR = WWDG_CR_WDGA; // Trigger watchdog reset
 	for (;;); // Never return
 }
 
 static void delayf(void) {
-	TIM14_EGR = TIM_EGR_UG; // Reset arming timeout
+	TIM6_EGR = TIM_EGR_UG; // Reset arming timeout
 }
 
 static void beep(void) {
@@ -539,6 +539,8 @@ void main(void) {
 #ifndef ANALOG
 	initio();
 #endif
+
+
 	TIM1_BDTR = TIM_DTG | TIM_BDTR_OSSR | TIM_BDTR_MOE;
 	TIM1_ARR = CLK_KHZ / 24 - 1;
 	TIM1_CR1 = TIM_CR1_CEN | TIM_CR1_ARPE;
@@ -593,21 +595,21 @@ void main(void) {
 	}
 	if (cfg.arm || (csr & RCC_CSR_WWDGRSTF)) { // Arming required
 	rearm:
-		TIM14_PSC = CLK_KHZ / 10 - 1; // 0.1ms resolution
-		TIM14_ARR = 2499; // 250ms
-		TIM14_CR1 = TIM_CR1_URS;
-		TIM14_EGR = TIM_EGR_UG;
-		TIM14_CR1 = TIM_CR1_CEN | TIM_CR1_URS;
-		TIM14_SR = ~TIM_SR_UIF;
+		TIM6_PSC = CLK_KHZ / 10 - 1; // 0.1ms resolution
+		TIM6_ARR = 2499; // 250ms
+		TIM6_CR1 = TIM_CR1_URS;
+		TIM6_EGR = TIM_EGR_UG;
+		TIM6_CR1 = TIM_CR1_CEN | TIM_CR1_URS;
+		TIM6_SR = ~TIM_SR_UIF;
 		throt = 1;
-		while (!(TIM14_SR & TIM_SR_UIF)) { // Wait for 250ms zero throttle
+		while (!(TIM6_SR & TIM_SR_UIF)) { // Wait for 250ms zero throttle
 			__WFI();
 			beep();
 			if (!throt) continue;
-			TIM14_EGR = TIM_EGR_UG;
+			TIM6_EGR = TIM_EGR_UG;
 		}
 		throt = 0;
-		TIM14_CR1 = 0;
+		TIM6_CR1 = 0;
 		playmusic(hall ? "G_GC" : "GC", cfg.volume);
 	}
 #endif

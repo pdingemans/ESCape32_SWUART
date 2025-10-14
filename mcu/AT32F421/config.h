@@ -18,7 +18,9 @@
 #pragma once
 
 #define CLK 120000000
+#ifndef IO_PB4
 #define IO_PA2
+#endif
 
 #define IFTIM TIM3
 #define IFTIM_XRES 0
@@ -32,15 +34,28 @@
 #define IFTIM_OCR TIM3_CCR3
 #define iftim_isr tim3_isr
 
+
 #define IOTIM TIM15
-#define IOTIM_IDR (GPIOA_IDR & 0x4) // A2
-#define IOTIM_DMA 5
+
 #define iotim_isr tim15_isr
+#define IOTIM_DMA 5
+#ifdef IO_PA2
+
 #define iodma_isr dma1_channel4_7_dma2_channel3_5_isr
+
+#define IOTIM_IDR (GPIOA_IDR & 0x4) // A2
+#elif defined(IO_PA6)
+#define IOTIM_IDR (GPIOA_IDR & 0x40) // A6
+#else
+#define IOTIM_IDR (GPIOB_IDR & 1<<4) // B4
+#endif
+
+
 
 #define USART1_RX_DMA 3
 #define USART1_TX_DMA 2
 #define usart1_tx_dma_isr dma1_channel2_3_dma2_channel1_2_isr
+
 
 
 // sw uart stuff has been moved to swuart itself.
