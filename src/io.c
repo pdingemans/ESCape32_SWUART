@@ -37,11 +37,10 @@ static void dshotirq(void);
 static void dshotdma(void);
 static void cliirq(void);
 static void entryirqPB4(void);
-static void servoirqfallingPB4(void);
-static void servoirqrisingPB4(void);
+
 
 static void (*PB4irqHandler)(void);
-
+static void clisendingcallback(void* context);
 
 #ifdef IO_PA2
 static void serialirq(void);
@@ -53,7 +52,10 @@ static char rxlen;
 #endif
 static Func ioirq, iodma;
 static char dshotinv, iobuf[1024];
-static uint8_t sending;
+// addition for sw uart cli stuff
+static uint16_t bytestoanswer;
+static uint16_t bytetosend;
+
 static uint16_t dshotarr1, dshotarr2, dshotbuf1[32], dshotbuf2[23] = {-1, -1, 0, -1, 0, -1, -1, 0, -1, 0, -1, -1, 0, -1, 0, -1, 0, -1, -1, -1};
 
 
@@ -75,7 +77,6 @@ void initio(void) {
 #ifdef IO_PB4
 	ioirq = entryirqPB4;
 	PB4irqHandler=NULL;
-	sending = false;
 	// Configure PB4 as TIM3_CH1 (AF1) for timer input capture
 	//gpio_mode_setup(GPIOB, GPIO_MODE_AF, GPIO_PUPD_PULLUP, GPIO4);
 	//gpio_set_af(GPIOB, GPIO_AF1, GPIO4);
@@ -87,49 +88,42 @@ void initio(void) {
 	TIM_CR1(IOTIM) = TIM_CR1_CEN; // Start timer
 #endif
 }
-
+static void clisendingcallback(void* context)
+{
+	if (bytestoanswer != 0)
+	{
+		bytestoanswer--;
+		singlewire_uart_send_frame(1, (uint8_t*)&iobuf[bytetosend++], 1);
+	}
+}
 static void clicallback(void* context, uint8_t b) 
 {
-	static int i=0, j=0, sending = false;
+	static int i=0;
 	(void)context;
-	if (sending)
-	{
-		
-		if (j!=0)
-		{
-			j--;
-			singlewire_uart_send_frame(1, (char*)&iobuf[i++], 1);
-		}
-		else 
-		{
-			sending = false;
-			i = 0;
-		}
+
+	if (b == '\b' || b == 0x7f) 
+	{ // Backspace
+		if (i) --i;
+		return;
 	}
-	else
+	iobuf[i++] = b;
+	if (i == 2 && iobuf[0] == 0x00 && iobuf[1] == 0xff) 
 	{
-		if (b == '\b' || b == 0x7f) 
-		{ // Backspace
-			if (i) --i;
-			return;
-		}
-		iobuf[i++] = b;
-		if (i == 2 && iobuf[0] == 0x00 && iobuf[1] == 0xff) 
-		{
-			scb_reset_system(); // Reboot into bootloader
-		}
-		if (b != '\n') return;
-		iobuf[i] = '\0';
-		i = 0;
-		if(!(j = execcmd(iobuf))) 
-		{
-			return;
-		}
-		j--; 
-		sending = true;
-		singlewire_uart_send_frame(1, &iobuf[i++], 1);
+		scb_reset_system(); // Reboot into bootloader
+	}
+	if (b != '\n') return;
+	iobuf[i] = '\0';
+	i = 0;
+	bytestoanswer = execcmd(iobuf);
+	if (bytestoanswer == 0)
+	{
+		return;
+	}
+
+	bytetosend=0;
+	clisendingcallback(NULL);
 	
-	}
+	
 
 }
 static volatile uint16_t servotime;
@@ -139,23 +133,62 @@ static volatile uint16_t period;
 // duration of the irq 1 usec
 
 static void servoval (int t);
-
+static void servoirqfallingPB4(void);
+static void servoirqrisingPB4(void);
+// input filtering on edges
+// we can do that by
+// measurement of time between edges- must be between 800 and 2200 usec
+// period must be larger then 8 msec.
+// if not ignore the edge, if its in between : take 3 consecutive measurements which should be the same level
+// to check if we really have the correct level
+// we will switch the irq handler between rising and falling edges
 static void servoirqrisingPB4(void)
 {	
-
-	if (IOTIM_IDR)
-	{
-		period=TIM_CNT(IOTIM);
-		TIM_CNT(IOTIM) = 0;
-	}
-	else 
-	{
-		servotime=TIM_CNT(IOTIM);
-		servoval(servotime);	// process pulsewidth here
-	}
 	exti_reset_request(EXTI4);
+	period = TIM_CNT(IOTIM);
+	// if we have a valid period, check for level
+	if (period > 8000)
+	{
+		// input should be high here
+		/* Use compiler memory barriers between direct reads of the
+		 * memory-mapped input register. The barrier prevents the compiler
+		 * from caching or reordering the loads, ensuring each `IOTIM_IDR`
+		 * access is emitted.
+		 */
+		if (IOTIM_IDR) {
+			__asm__ __volatile__("" ::: "memory");
+			if (IOTIM_IDR) {
+				__asm__ __volatile__("" ::: "memory");
+				if (IOTIM_IDR) {
+					exti_set_trigger(EXTI4, EXTI_TRIGGER_FALLING);
+					PB4irqHandler = servoirqfallingPB4; // next time we need a falling edge
+					TIM_CNT(IOTIM)=0
+				}
+			}
+		}
+	}
 }
 
+static void servoirqfallingPB4(void)
+{	
+	exti_reset_request(EXTI4);
+
+	servotime=TIM_CNT(IOTIM);
+	// if we are not within valid servo pulsewidth, ignore. another one will follow
+	if (servotime < 800 || servotime > 2200) return;
+	if (!IOTIM_IDR) {
+		__asm__ __volatile__("" ::: "memory");
+		if (!IOTIM_IDR) {
+			__asm__ __volatile__("" ::: "memory");
+			if (!IOTIM_IDR) {
+				exti_set_trigger(EXTI4, EXTI_TRIGGER_RISING);
+				PB4irqHandler = servoirqrisingPB4; // next time we need a rising edge
+				servoval(servotime);    // process pulsewidth here
+			}
+		}
+	}
+
+}
 
 void pb4irq(void)
 {
@@ -176,7 +209,7 @@ static void entryirqPB4(void) {
     		timer_disable_irq(IOTIM, TIM_DIER_UIE);
 			exti_select_source(EXTI4, GPIOB);
 	   		// Configure EXTI for both edge detection using libopencm3
-    		exti_set_trigger(EXTI4, EXTI_TRIGGER_BOTH);
+    		exti_set_trigger(EXTI4, EXTI_TRIGGER_RISING);
 			PB4irqHandler=servoirqrisingPB4; // next time we need a riding edge
 			nvic_set_priority(NVIC_EXTI4_15_IRQ, 0); // high as we dont want to miss edges
     		nvic_enable_irq(NVIC_EXTI4_15_IRQ);
@@ -192,7 +225,7 @@ static void entryirqPB4(void) {
 		timer_disable_irq(IOTIM, TIM_DIER_UIE); // we dont want any timer interrupy anymore..
 		singlewire_uart_init(1);
 		sw_uart_set_rx_callback(1, clicallback, NULL);
-		sw_uart_set_tx_callback(1, clicallback, NULL);
+		sw_uart_set_tx_callback(1, clisendingcallback, NULL);
 		PB4irqHandler=sw_uart_exti_handler;	
 		return;
 	}
