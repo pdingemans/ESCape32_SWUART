@@ -24,7 +24,7 @@
 #elif SENS_MAP == 0xA6 // A6 (volt)
 #define SENS_CHAN 0x6
 #elif SENS_MAP == 0xA3A6 // A3 (volt), A6 (curr)
-#define SENS_CHAN 0x66
+#define SENS_CHAN (6+(3<<5))
 #elif SENS_MAP == 0xA3BF // A3 (volt), B15 (curr)
 #define SENS_CHAN 0x6e
 #endif
@@ -211,17 +211,11 @@ void disable_ADC(void)
 	ADC1_CR2 = 0;
 	DMA1_CCR(1) = 0;
  	adc_disabled_cnt++;
-	if (adc_disabled_cnt >= 2)
-	{
-		volatile temp = 34;
-	}
-
 }
 
 
-void enable_ADC(void) {
-
-	
+void enable_ADC(void) 
+{
 	if(adc_disabled_cnt != 0)
 	{ 
 		adc_disabled_cnt--;
@@ -231,8 +225,8 @@ void enable_ADC(void) {
 			adctrig(); // just start again...
 		}
 		// I could have written this as
-		// if(--adc_disabled_cnt == 0) adctrig();
-		// but I find it less readable...
+		// adc_disabled_cnt ? --adc_disabled_cnt ? (void)0 : adctrig() : (void)0;
+		// but that is less readable... and codesize is the same. the compiler doesnt care :)
 	}
 }
 

@@ -209,7 +209,8 @@ void sportcallback(void *context, uint8_t data)
 		}
 	} else if (state == WAIT_ID) {
 
-		if ((data & 0x1f) != cfg.telem_phid - 1) {
+		if ((data & 0x1f) != cfg.telem_phid + 8)
+		{
 			state = WAIT_START; // Invalid ID, go back to waiting for start
 			return;
 		}
@@ -218,6 +219,7 @@ void sportcallback(void *context, uint8_t data)
 		int t = type[n];
 		int len = 0;
 		switch (n++) {
+			// todo. make appropriate response according frsky coding
 			case 0: len = sportresp(t, temp1); break;
 			case 1: len = sportresp(t, temp2); break;
 			case 2: len = sportresp(t, volt); break;

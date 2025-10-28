@@ -523,15 +523,14 @@ void main(void) {
 	lock = cfg.duty_lock;
 	throt = cfg.throt_set * 20;
 	telmode = cfg.telem_mode;
-	telmode = 3; // test!!!
-	cfg.telem_phid = 10; // test!!!
+
 #if defined ANALOG || defined ANALOG_CHAN
 	analog = IO_ANALOG;
 #endif
 	init();
 	initgpio();
 	initled();
-	inittelem();
+  inittelem();
 
 	
 
@@ -786,8 +785,7 @@ void main(void) {
 		}
 	tick:
 		SCB_SCR = SCB_SCR_SLEEPONEXIT; // Suspend main loop
-		__WFI();
-		if (tick & 15) continue; // 16kHz -> 1kHz
+		__WFI();		if (tick & 15) continue; // 16kHz -> 1kHz
 #ifndef ANALOG
 		if (cutoff < 3000) cutoff = volt < cfg.prot_volt * cells * 10 ? cutoff + 1 : 0;
 		else if (!running) goto rearm; // Low voltage cutoff after 3s

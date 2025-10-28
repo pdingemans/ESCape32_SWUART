@@ -112,6 +112,7 @@ typedef struct
     uint32_t bit_period;
     uart_state_t uart_state;
     sw_uart_rx_callback_t rx_callback;
+    uint16_t tx_startdelay;
     void *rx_context;
 
     // Callbacks
@@ -155,6 +156,7 @@ sw_uart_config_t uarts[2] = {
      .sw_uart_tx_bits_count = 0,
 
      .sw_uart_rx_callback = NULL,
+     .tx_startdelay= (120 * TX_USEC_DELAY) - 1,
      .sw_uart_rx_context = NULL,
      .sw_uart_tx_complete_callback = NULL,
      .ccr_base = NULL,
@@ -207,6 +209,7 @@ sw_uart_config_t uarts[2] = {
      .bit_period = 120000000 / 38400, // Use baud_rate value directly
      .uart_state = IDLE,
      .rx_callback = NULL,
+     .tx_startdelay = (120 * 10) - 1,
      .rx_context = NULL,
 
      .sw_uart_rx_buffer = {0},
@@ -379,8 +382,8 @@ void sw_uart_set_tx_callback(uint8_t uart_id, sw_uart_tx_callback_t callback, vo
 
 // EXTI interrupt handler (call from MCU interrupt handler)
 void sw_uart_input_irq(uint8_t uart_id); // foward declaration
-#define sw_uart_exti_handler exti4_15_isr
-void exti4_15_isr()
+//#define sw_uart_exti_handler exti4_15_isr
+void sw_uart_exti_handler(void)
 {
     // Check which EXTI line triggered the interrupt
     if (exti_get_flag_status(EXTI4)) {
@@ -703,7 +706,7 @@ inline static void sw_uart_start_tx_dma(sw_uart_config_t *config)
     // after that we need 1 bit period, therefore dis/enable preload
 
     timer_enable_preload(config->timer);
-    timer_set_period(config->timer, TX_START_DELAY); // wait a while
+    timer_set_period(config->timer, config->tx_startdelay); // wait a while
     timer_generate_event(config->timer, TIM_EGR_UG);
 
     // timer_clear_flag(config->timer, TIM_SR_UIF);     // Clear any pending update flags
@@ -729,11 +732,17 @@ inline static void sw_uart_start_tx_dma(sw_uart_config_t *config)
 void sw_uart_enable_tx(sw_uart_config_t *config)
 {
     // Configure GPIO pin for output using libopencm3
-    gpio_mode_setup(config->gpio_port, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, config->gpio_pin);
+    
+    // Inverted logic: set initial idle state to LOW using libopencm3
+    // first set the output, otherwise there will be a glitch
+    config->inverted?gpio_clear(config->gpio_port, config->gpio_pin):gpio_set(config->gpio_port, config->gpio_pin);
+   
+   // gpio_mode_setup(config->gpio_port, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, config->gpio_pin);
+   // a bit of a hack but it works, we use the inverted flag to set the pullup/pulldown
+    gpio_mode_setup(config->gpio_port, GPIO_MODE_OUTPUT, config->inverted+1, config->gpio_pin);
+
     gpio_set_output_options(config->gpio_port, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, config->gpio_pin);
 
-    // Inverted logic: set initial idle state to LOW using libopencm3
-    config->inverted?gpio_clear(config->gpio_port, config->gpio_pin):gpio_set(config->gpio_port, config->gpio_pin);
 }
 
 // // Send a single byte

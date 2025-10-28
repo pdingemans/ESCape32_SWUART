@@ -16,6 +16,9 @@
 */
 
 #include "common.h"
+#include <libopencm3/stm32/exti.h>
+#include <libopencm3/cm3/nvic.h>
+#include <libopencm3/cm3/cortex.h>
 #include "singlewire_uart.h"
 
 #ifdef AT32F4
@@ -34,7 +37,11 @@ static void dshotirq(void);
 static void dshotdma(void);
 static void cliirq(void);
 static void entryirqPB4(void);
-static void servoirqPB4(void);
+static void servoirqfallingPB4(void);
+static void servoirqrisingPB4(void);
+
+static void (*PB4irqHandler)(void);
+
 
 #ifdef IO_PA2
 static void serialirq(void);
@@ -54,17 +61,6 @@ static uint16_t dshotarr1, dshotarr2, dshotbuf1[32], dshotbuf2[23] = {-1, -1, 0,
 void initio(void) {
 #ifdef IO_PA2
 	ioirq = entryirq;
-#else
-	ioirq = entryirqPB4;
-	sending = false;
-#endif
-
-#ifdef IO_PB4
-	// Configure PB4 as TIM3_CH1 (AF1) for timer input capture
-	gpio_mode_setup(GPIOB, GPIO_MODE_AF, GPIO_PUPD_PULLUP, GPIO4);
-	gpio_set_af(GPIOB, GPIO_AF1, GPIO4);
-#endif
-
 	TIM_BDTR(IOTIM) = TIM_BDTR_MOE;
 	TIM_SMCR(IOTIM) = TIM_SMCR_SMS_RM | TIM_SMCR_TS_TI1FP1; // Reset on rising edge on TI1
 	TIM_CCMR1(IOTIM) = TIM_CCMR1_CC1S_IN_TI1 | TIM_CCMR1_IC1F_CK_INT_N_8;
@@ -75,21 +71,36 @@ void initio(void) {
 	TIM_CR1(IOTIM) = TIM_CR1_URS;
 	TIM_EGR(IOTIM) = TIM_EGR_UG;
 	TIM_CR1(IOTIM) = TIM_CR1_CEN | TIM_CR1_ARPE | TIM_CR1_URS;
+#endif
+#ifdef IO_PB4
+	ioirq = entryirqPB4;
+	PB4irqHandler=NULL;
+	sending = false;
+	// Configure PB4 as TIM3_CH1 (AF1) for timer input capture
+	//gpio_mode_setup(GPIOB, GPIO_MODE_AF, GPIO_PUPD_PULLUP, GPIO4);
+	//gpio_set_af(GPIOB, GPIO_AF1, GPIO4);
+	// Configure timer with 1us resolution and overflow interrupt
+	TIM_PSC(IOTIM) = CLK_MHZ - 1; // 1us resolution
+	TIM_ARR(IOTIM) = -1; // Maximum period
+	TIM_DIER(IOTIM) = TIM_DIER_UIE; // Enable overflow interrupt
+	TIM_EGR(IOTIM) = TIM_EGR_UG; // Update registers
+	TIM_CR1(IOTIM) = TIM_CR1_CEN; // Start timer
+#endif
 }
 
 static void clicallback(void* context, uint8_t b) 
 {
-	static int i=0, j=0;
+	static int i=0, j=0, sending = false;
 	(void)context;
 	if (sending)
 	{
-		if (j--) 
+		
+		if (j!=0)
 		{
-
-			singlewire_uart_send_frame(1, &iobuf[i++], 1);
-			sending = true;
+			j--;
+			singlewire_uart_send_frame(1, (char*)&iobuf[i++], 1);
 		}
-		else
+		else 
 		{
 			sending = false;
 			i = 0;
@@ -103,138 +114,88 @@ static void clicallback(void* context, uint8_t b)
 			return;
 		}
 		iobuf[i++] = b;
-		if (i == 2 && iobuf[0] == 0x00 && iobuf[1] == 0xff) scb_reset_system(); // Reboot into bootloader
+		if (i == 2 && iobuf[0] == 0x00 && iobuf[1] == 0xff) 
+		{
+			scb_reset_system(); // Reboot into bootloader
+		}
 		if (b != '\n') return;
 		iobuf[i] = '\0';
 		i = 0;
-		j = execcmd(iobuf);
-		if (j--) 
+		if(!(j = execcmd(iobuf))) 
 		{
-
-			singlewire_uart_send_frame(1, &iobuf[i++], 1);
-			sending = true;
+			return;
 		}
+		j--; 
+		sending = true;
+		singlewire_uart_send_frame(1, &iobuf[i++], 1);
+	
 	}
 
 }
+static volatile uint16_t servotime;
+static volatile uint16_t period;
+// latency measurement on PB4
+// from rising edge to enter these irq's: 1 usec
+// duration of the irq 1 usec
+
+static void servoval (int t);
+
+static void servoirqrisingPB4(void)
+{	
+
+	if (IOTIM_IDR)
+	{
+		period=TIM_CNT(IOTIM);
+		TIM_CNT(IOTIM) = 0;
+	}
+	else 
+	{
+		servotime=TIM_CNT(IOTIM);
+		servoval(servotime);	// process pulsewidth here
+	}
+	exti_reset_request(EXTI4);
+}
+
+
+void pb4irq(void)
+{
+	if(PB4irqHandler && (EXTI_PR & EXTI4)) PB4irqHandler(); // depends on mode, either swuart or servo
+	 if (EXTI_PR & (EXTI6)) {
+       sw_uart_exti_handler();
+    }
+	
+}
 
 static void entryirqPB4(void) {
-	static int n, c, d;
+	static int c=0;
 	if (TIM_SR(IOTIM) & TIM_SR_UIF) { // Timeout ~66ms
 		TIM_SR(IOTIM) = ~TIM_SR_UIF;
-		if (!IOTIM_IDR) { // Low level
-			if (IO_ANALOG) goto analog;
-			n = 0;
-			return;
+		if (!IOTIM_IDR) 
+		{ // Low level so we are not connected to the serial monitor of a PC
+   			// Disable timer overflow interrupt (we only use DMA requests)
+    		timer_disable_irq(IOTIM, TIM_DIER_UIE);
+			exti_select_source(EXTI4, GPIOB);
+	   		// Configure EXTI for both edge detection using libopencm3
+    		exti_set_trigger(EXTI4, EXTI_TRIGGER_BOTH);
+			PB4irqHandler=servoirqrisingPB4; // next time we need a riding edge
+			nvic_set_priority(NVIC_EXTI4_15_IRQ, 0); // high as we dont want to miss edges
+    		nvic_enable_irq(NVIC_EXTI4_15_IRQ);
+			exti_enable_request(EXTI4);
+			// here we can do calibirq stuff if really needed, for now we skip it
+			//ioirq = calibirq;
+			//calibirq();
+			//IWDG_KR = IWDG_KR_START;
 		}
-		if (++c < 16) return; // Wait for ~1s before entering CLI
-		// instantiate a new sw uart here, based on timer15 and PB4
+		c++;
+		if (c < 16) return; // Wait for ~1s before entering CLI
+		// instantiate a new sw uart here, based on timer15 and PB4, with ID=1
+		timer_disable_irq(IOTIM, TIM_DIER_UIE); // we dont want any timer interrupy anymore..
 		singlewire_uart_init(1);
 		sw_uart_set_rx_callback(1, clicallback, NULL);
 		sw_uart_set_tx_callback(1, clicallback, NULL);
-
-
-// #else
-// 		TIM3_CCER = 0;
-// 		TIM3_SMCR = TIM_SMCR_SMS_RM | TIM_SMCR_TS_TI1F_ED; // Reset on any edge on TI1
-// 		TIM3_CCMR1 = TIM_CCMR1_OC1PE | TIM_CCMR1_OC1M_PWM2 | TIM_CCMR1_CC2S_IN_TI1 | TIM_CCMR1_IC2F_CK_INT_N_8;
-// 		TIM3_CCER = TIM_CCER_CC2E | TIM_CCER_CC2P; // IC2 on falling edge on TI1
-// 		TIM3_SR = ~TIM_SR_CC2IF;
-// 		TIM3_DIER = TIM_DIER_CC2IE;
-// 		TIM3_PSC = 0;
-// 		TIM3_ARR = CLK_CNT(38400) - 1; // Bit time
-// 		TIM3_CCR1 = CLK_CNT(76800); // Half-bit time
-// 		TIM3_EGR = TIM_EGR_UG;
-// 		TIM3_CR1 = TIM_CR1_CEN;
-// #endif
+		PB4irqHandler=sw_uart_exti_handler;	
 		return;
 	}
-	int t = TIM_CCR1(IOTIM); // Time between two rising edges
-	if (IO_ANALOG) {
-	analog:
-#ifndef ANALOG_CHAN
-		io_analog();
-		analog = 1;
-#endif
-		return;
-	}
-	if (!n++) return; // First capture is always invalid
-	IWDG_KR = IWDG_KR_START;
-#ifdef IO_PA2
-	if (cfg.input_mode >= 2) {
-		ioirq = serialirq;
-		io_serial();
-		switch (cfg.input_mode) {
-			case 2: // Serial
-				iodma = serialdma;
-				rxlen = 4;
-				USART2_BRR = CLK_CNT(SERIAL_BR);
-				break;
-			case 3: // iBUS
-				iodma = ibusdma;
-				rxlen = 32;
-				USART2_BRR = CLK_CNT(115200);
-				break;
-			case 4: // SBUS/SBUS2
-				iodma = sbusdma;
-				rxlen = 25;
-				USART2_BRR = CLK_CNT(100000);
-				USART2_CR1 = USART_CR1_PCE | USART_CR1_M0;
-				USART2_CR2 = USART_CR2_STOPBITS_2;
-#ifndef AT32F4
-				USART2_CR2 |= USART_CR2_RXINV | USART_CR2_TXINV;
-				GPIOA_PUPDR = (GPIOA_PUPDR & ~0x30) | 0x20; // A2 (pull-down)
-#endif
-				TIM15_PSC = CLK_MHZ / 8 - 1; // 125ns resolution
-				TIM15_ARR = -1;
-				TIM15_EGR = TIM_EGR_UG;
-				TIM15_CR1 = TIM_CR1_CEN | TIM_CR1_ARPE;
-				break;
-			case 5: // CRSF
-				ioirq = crsfirq;
-				USART2_BRR = CLK_CNT(416666);
-				break;
-		}
-		USART2_CR3 = USART_CR3_HDSEL;
-		USART2_CR1 |= USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_IDLEIE;
-		DMA1_CPAR(USART2_RX_DMA) = (uint32_t)&USART2_RDR;
-		DMA1_CMAR(USART2_RX_DMA) = (uint32_t)iobuf;
-		DMA1_CPAR(USART2_TX_DMA) = (uint32_t)&USART2_TDR;
-		DMA1_CMAR(USART2_TX_DMA) = (uint32_t)iobuf;
-		return;
-	}
-#endif
-	if (TIM_PSC(IOTIM)) {
-		if (t > 2000) { // Servo/Oneshot125
-			ioirq = calibirq;
-			calibirq();
-			return;
-		}
-		TIM_PSC(IOTIM) = TIM_PSC(IOTIM) == CLK_MHZ - 1 ? CLK_MHZ / 8 - 1 : 0;
-		TIM_EGR(IOTIM) = TIM_EGR_UG;
-		n = 0;
-		return;
-	}
-	int m = 2;
-	while (t >= CLK_CNT(800000)) t >>= 1, --m;
-	if (d != m) {
-		d = m;
-		n = 1;
-		return;
-	}
-	if (m < 0 || n < 4) return;
-	ioirq = dshotirq;
-	iodma = dshotdma;
-	dshotarr1 = CLK_CNT(150000 << m) - 1;
-	dshotarr2 = CLK_CNT(375000 << m) - 1;
-	TIM_CCER(IOTIM) = 0;
-	TIM_SMCR(IOTIM) = TIM_SMCR_SMS_RM | TIM_SMCR_TS_TI1F_ED; // Reset on any edge on TI1
-	TIM_CCMR1(IOTIM) = TIM_CCMR1_CC1S_IN_TRC | TIM_CCMR1_IC1F_CK_INT_N_8;
-	TIM_DIER(IOTIM) = TIM_DIER_UIE;
-	TIM_ARR(IOTIM) = dshotarr1; // Frame reset timeout
-	TIM_EGR(IOTIM) = TIM_EGR_UG;
-	DMA1_CPAR(IOTIM_DMA) = (uint32_t)&TIM_CCR1(IOTIM);
-	DMA1_CMAR(IOTIM_DMA) = (uint32_t)dshotbuf1;
 }
 static void entryirq(void) {
 	static int n, c, d;

@@ -26,4 +26,6 @@ typedef void (*sw_uart_tx_callback_t)(void *context);
 // Callback registration
 void sw_uart_set_rx_callback(uint8_t uart_id, sw_uart_rx_callback_t callback, void *context);
 void sw_uart_set_tx_callback(uint8_t uart_id, sw_uart_tx_callback_t callback, void *context);
+// interrupt handlers (to be called from mcu interrupt handlers)
+void sw_uart_exti_handler(void);
 #endif // SINGLEWIRE_UART_H

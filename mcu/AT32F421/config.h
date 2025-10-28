@@ -48,6 +48,7 @@
 #define IOTIM_IDR (GPIOA_IDR & 0x40) // A6
 #else
 #define IOTIM_IDR (GPIOB_IDR & 1<<4) // B4
+#define pb4irq exti4_15_isr
 #endif
 
 
