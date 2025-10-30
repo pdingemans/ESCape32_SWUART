@@ -126,8 +126,6 @@ static void clicallback(void* context, uint8_t b)
 	
 
 }
-static volatile uint16_t servotime;
-static volatile uint16_t period;
 // latency measurement on PB4
 // from rising edge to enter these irq's: 1 usec
 // duration of the irq 1 usec
@@ -150,42 +148,54 @@ static void servoirqrisingPB4(void)
 	if (period > 8000)
 	{
 		// input should be high here
-		/* Use compiler memory barriers between direct reads of the
-		 * memory-mapped input register. The barrier prevents the compiler
-		 * from caching or reordering the loads, ensuring each `IOTIM_IDR`
-		 * access is emitted.
-		 */
-		if (IOTIM_IDR) {
-			__asm__ __volatile__("" ::: "memory");
-			if (IOTIM_IDR) {
-				__asm__ __volatile__("" ::: "memory");
-				if (IOTIM_IDR) {
-					exti_set_trigger(EXTI4, EXTI_TRIGGER_FALLING);
-					PB4irqHandler = servoirqfallingPB4; // next time we need a falling edge
-					TIM_CNT(IOTIM)=0
-				}
-			}
+		// use multiple reads to filter spurious edges	
+		// signal is sample 8 times with 16 ns (2 cycles) apart
+		// we need the signal to be high all the time, so that's ~120 nsec in total
+		// asssembly: 		if (IOTIM_IDR & IOTIM_IDR & IOTIM_IDR & IOTIM_IDR & IOTIM_IDR & IOTIM_IDR & IOTIM_IDR & IOTIM_IDR)
+ /*800325c:	f04f 4190 	mov.w	r1, #1207959552	; 0x48000000
+ 8003260:	f8d1 2410 	ldr.w	r2, [r1, #1040]	; 0x410
+ 8003264:	f8d1 3410 	ldr.w	r3, [r1, #1040]	; 0x410
+ 8003268:	f8d1 c410 	ldr.w	ip, [r1, #1040]	; 0x410
+ 800326c:	f8d1 7410 	ldr.w	r7, [r1, #1040]	; 0x410
+ 8003270:	f8d1 6410 	ldr.w	r6, [r1, #1040]	; 0x410
+ 8003274:	f8d1 5410 	ldr.w	r5, [r1, #1040]	; 0x410
+ 8003278:	f8d1 0410 	ldr.w	r0, [r1, #1040]	; 0x410
+ 800327c:	f8d1 1410 	ldr.w	r1, [r1, #1040]	; 0x410
+ 8003280:	400a      	ands	r2, r1
+ 8003282:	4013      	ands	r3, r2
+ 8003284:	ea03 030c 	and.w	r3, r3, ip
+ 8003288:	403b      	ands	r3, r7
+ 800328a:	4033      	ands	r3, r6
+ 800328c:	402b      	ands	r3, r5
+ 800328e:	4003      	ands	r3, r0
+ 8003290:	06db      	lsls	r3, r3, #27
+ 8003292:	d508      	bpl.n	80032a6 <servoirqrisingPB4+0x66>*/
+
+
+		if (IOTIM_IDR & IOTIM_IDR & IOTIM_IDR & IOTIM_IDR & IOTIM_IDR & IOTIM_IDR & IOTIM_IDR & IOTIM_IDR)
+		{
+			exti_set_trigger(EXTI4, EXTI_TRIGGER_FALLING);
+			PB4irqHandler = servoirqfallingPB4; // next time we need a falling edge
+			TIM_CNT(IOTIM)=0;
 		}
 	}
+
+	
 }
 
 static void servoirqfallingPB4(void)
 {	
+	static uint16_t servotime;
 	exti_reset_request(EXTI4);
 
 	servotime=TIM_CNT(IOTIM);
 	// if we are not within valid servo pulsewidth, ignore. another one will follow
 	if (servotime < 800 || servotime > 2200) return;
-	if (!IOTIM_IDR) {
-		__asm__ __volatile__("" ::: "memory");
-		if (!IOTIM_IDR) {
-			__asm__ __volatile__("" ::: "memory");
-			if (!IOTIM_IDR) {
-				exti_set_trigger(EXTI4, EXTI_TRIGGER_RISING);
-				PB4irqHandler = servoirqrisingPB4; // next time we need a rising edge
-				servoval(servotime);    // process pulsewidth here
-			}
-		}
+	if (!(IOTIM_IDR | IOTIM_IDR | IOTIM_IDR | IOTIM_IDR | IOTIM_IDR | IOTIM_IDR | IOTIM_IDR | IOTIM_IDR)) 
+	{
+		exti_set_trigger(EXTI4, EXTI_TRIGGER_RISING);
+		PB4irqHandler = servoirqrisingPB4; // next time we need a rising edge
+		servoval(servotime);    // process pulsewidth here
 	}
 
 }
