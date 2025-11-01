@@ -143,7 +143,7 @@ static void servoirqrisingPB4(void);
 static void servoirqrisingPB4(void)
 {	
 	exti_reset_request(EXTI4);
-	period = TIM_CNT(IOTIM);
+	uint16_t period = TIM_CNT(IOTIM);
 	// if we have a valid period, check for level
 	if (period > 8000)
 	{
