@@ -18,7 +18,7 @@
 #include "common.h"
 
 #define REVISION 14
-#define REVPATCH 5
+#define REVPATCH 99 // start at t
 
 const Cfg cfgdata = {
 	.id = 0x32ea,
@@ -429,7 +429,7 @@ void adcdata(int t, int u, int v, int c, int a) {
 	temp1 = max((t = smooth(&st, t, 10)) >> 2, 0); // C
 	temp2 = hall || cfg.prot_sens ? max((u = smooth(&su, TEMP_SENS(u), 10)) >> 2, 0) : 0; // C
 	volt = smooth(&sv, v * VOLT_MUL * 131 >> 17, 7); // V/100
-	curr = smooth(&sc, c * CURR_MUL * 205 >> 11, 4); // A/100
+	curr = smooth(&sc, c * CURR_MUL * 205 >> 11, 4);// A/100, more smoothing for noise reduction
 	i += curr; // Current integral
 	if (!(tickms & 0x3ff)) {
 		csum = (q += i >> 10) * 91 >> 15; // mAh

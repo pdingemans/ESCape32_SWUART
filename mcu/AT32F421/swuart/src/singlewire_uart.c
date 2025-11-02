@@ -68,9 +68,6 @@ static inline void libopencm3_atomic_exti_bit_modify(uint32_t pin_num, uint8_t s
     BBIO_PERIPH(EXTI_BASE, pin_num) = state;
 }
 
-// Callback function types
-typedef void (*sw_uart_rx_callback_t)(void *context, uint8_t data);
-typedef void (*sw_uart_tx_complete_callback_t)(void);
 
 // Internal function prototypes (not exposed in header)
 typedef struct
@@ -275,8 +272,6 @@ static inline void sw_uart_enable_rx(sw_uart_config_t *config);
 static inline void sw_uart_disable_rx(sw_uart_config_t *config);
 static inline void sw_uart_enable_tx(sw_uart_config_t *config);
 
-// testing stuff
-static volatile uint8_t indmahandler = 0;
 
 // Fast DMA configuration for RX - direct struct copy to registers
 static inline void sw_uart_configure_dma_rx(sw_uart_config_t *config)
@@ -373,7 +368,7 @@ void sw_uart_set_rx_callback(uint8_t uart_id, sw_uart_rx_callback_t callback, vo
     config->sw_uart_rx_context = context; // Store context for callback
 }
 // Set RX callback
-void sw_uart_set_tx_callback(uint8_t uart_id, sw_uart_tx_callback_t callback, void *context)
+void sw_uart_set_tx_callback(uint8_t uart_id, sw_uart_tx_complete_callback_t callback, void *context)
 {
     sw_uart_config_t *config = &uarts[uart_id];
     config->sw_uart_tx_complete_callback = callback;
@@ -402,11 +397,7 @@ void sw_uart_input_irq(uint8_t uart_id)
         return; // Not initialized
     }
 
-    if (indmahandler)
-    {
-        // we are in the middle of a DMA handler, ignore this interrupt
-        volatile int temp = 42;
-    }
+
     // Check if line is actually high (start bit for inverted protocol) using libopencm3
     if (config->inverted)
     {
@@ -545,7 +536,7 @@ inline void sw_uart_dma_complete_handler(sw_uart_config_t *config)
     {
         return; // Not initialized so we skip the whole thing
     }
-    indmahandler = 1;
+
 
     // Check DMA flags using libopencm3
     if (dma_get_interrupt_flag(config->dma, config->dma_channel, DMA_TCIF) ||
@@ -577,7 +568,7 @@ inline void sw_uart_dma_complete_handler(sw_uart_config_t *config)
             // Call completion callback if registered
             if (config->sw_uart_tx_complete_callback)
             {
-                config->sw_uart_tx_complete_callback();
+                config->sw_uart_tx_complete_callback(config->sw_uart_tx_context);
             }
             // lets do adc again
             enable_ADC();
@@ -616,7 +607,7 @@ inline void sw_uart_dma_complete_handler(sw_uart_config_t *config)
         }
     }
 
-    indmahandler = 0;
+
 }
 
 // Setup EXTI for rising edge detection to trigger delayed DMA start
